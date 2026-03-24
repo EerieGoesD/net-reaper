@@ -1159,11 +1159,11 @@ document.getElementById('linkCoffee').addEventListener('click', (e) => {
 });
 document.getElementById('linkIssue').addEventListener('click', (e) => {
   e.preventDefault();
-  window.__TAURI__.shell.open('https://example.com/report-issue'); // TODO: replace with real URL
+  window.__TAURI__.shell.open('https://github.com/EerieGoesD/net-reaper/issues');
 });
 document.getElementById('linkFeedback').addEventListener('click', (e) => {
   e.preventDefault();
-  window.__TAURI__.shell.open('https://example.com/feedback'); // TODO: replace with real URL
+  window.__TAURI__.shell.open('https://github.com/EerieGoesD/net-reaper/discussions');
 });
 
 // ── Language ──
