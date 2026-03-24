@@ -1,0 +1,9 @@
+{
+  "name": "com.eerie.net_reaper",
+  "description": "Net Reaper Download Manager",
+  "path": "net_reaper_host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://UPDATE_WITH_YOUR_EXTENSION_ID/"
+  ]
+}

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Net Reaper</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+  <div class="titlebar"></div>
+  <div class="main-layout">
+
+    <nav class="sidebar">
+      <div class="app-title">
+        <div class="app-title-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v10l4 4"/>
+            <path d="M12 12l-4 4"/>
+            <path d="M4 18h16"/>
+            <path d="M8 22h8"/>
+            <circle cx="12" cy="12" r="10"/>
+          </svg>
+        </div>
+        <span>Net Reaper</span>
+      </div>
+      <div class="nav-item active" data-panel="downloads">
+        <svg viewBox="0 0 16 16"><path d="M8 2v9M8 11l-3-3M8 11l3-3M3 13h10"/></svg>
+        Downloads
+      </div>
+      <div class="nav-item" data-panel="history">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5v4l2.5 1.5"/></svg>
+        History
+      </div>
+      <div class="nav-item" data-panel="settings">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
+        Settings
+      </div>
+      <div class="nav-item" data-panel="debug" id="navDebug" style="display:none">
+        <svg viewBox="0 0 16 16"><path d="M4 2l1 3M12 2l-1 3M3 7h10M5 7v4a3 3 0 006 0V7M2 10h2M12 10h2"/></svg>
+        Debug
+      </div>
+      <div class="sidebar-bottom"></div>
+    </nav>
+
+    <div class="panels">
+
+      <!-- Downloads Panel -->
+      <div id="panel-downloads" class="panel active">
+        <div class="add-bar">
+          <input class="url-input" type="url" id="urlInput" placeholder="Paste download URL here…" spellcheck="false" />
+          <button class="btn btn-accent" id="addBtn">Download</button>
+        </div>
+        <div class="controls">
+          <button class="btn btn-ghost btn-sm" id="pauseAllBtn">Pause All</button>
+          <button class="btn btn-ghost btn-sm" id="resumeAllBtn">Resume All</button>
+          <button class="btn btn-ghost btn-sm" id="clearCompletedBtn">Clear Completed</button>
+          <div class="spacer"></div>
+          <div class="inline-toggle" id="autoClearToggleDl">
+            <div class="debug-check" id="autoClearCheckDl"></div>
+            <span>Auto-clear completed</span>
+          </div>
+          <span class="status-text" id="globalStatus"></span>
+        </div>
+        <div class="speed-graph-stats">
+          <span class="graph-stat">Network <strong id="graphNetwork">0 B/s</strong></span>
+          <span class="graph-stat-sep">|</span>
+          <span class="graph-stat">Peak <strong id="graphPeak">0 B/s</strong></span>
+          <span class="graph-stat-sep">|</span>
+          <span class="graph-stat">Disk <strong id="graphDisk">0 B/s</strong></span>
+        </div>
+        <div class="speed-graph-wrap" id="speedGraphWrap" style="display:none;">
+          <div class="speed-graph-canvas-wrap">
+            <div class="speed-graph-y-labels">
+              <span id="graphYMax">0</span>
+              <span>0</span>
+            </div>
+            <canvas id="speedGraph"></canvas>
+          </div>
+        </div>
+        <div class="overall-progress" id="overallProgress" style="display:none;">
+          <div class="overall-progress-info">
+            <span class="overall-progress-text" id="overallText"></span>
+            <span class="overall-progress-pct" id="overallPct"></span>
+          </div>
+          <div class="overall-progress-track"><div class="overall-progress-bar" id="overallBar"></div></div>
+        </div>
+        <div class="download-list" id="downloadList">
+          <div class="empty-state" id="emptyState">
+            <div class="icon">&#8615;</div>
+            <p>Paste a URL above and hit <strong>Download</strong> to begin</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- History Panel -->
+      <div id="panel-history" class="panel">
+        <div class="controls">
+          <input class="search-input" type="text" id="historySearch" placeholder="Search history..." />
+          <select id="historySort">
+            <option value="date-desc">Newest first</option>
+            <option value="date-asc">Oldest first</option>
+            <option value="size-desc">Largest first</option>
+            <option value="size-asc">Smallest first</option>
+            <option value="name-asc">Name A–Z</option>
+            <option value="name-desc">Name Z–A</option>
+          </select>
+          <div class="spacer"></div>
+          <span class="status-text" id="historyCount"></span>
+          <button class="btn btn-danger btn-sm" id="historyClearBtn">Clear History</button>
+        </div>
+        <div class="history-filters" id="historyFilters">
+          <div class="history-filter-btn active" data-status="Completed">Completed</div>
+          <div class="history-filter-btn active" data-status="Downloading">Downloading</div>
+          <div class="history-filter-btn active" data-status="Paused">Paused</div>
+          <div class="history-filter-btn active" data-status="Failed">Failed</div>
+          <div class="history-filter-btn active" data-status="Cancelled">Cancelled</div>
+          <div class="history-filter-btn active" data-status="Queued">Queued</div>
+        </div>
+        <div class="download-list" id="historyList">
+          <div class="empty-state" id="historyEmpty">
+            <div class="icon">&#128218;</div>
+            <p>No download history yet</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Panel -->
+      <div id="panel-settings" class="panel">
+        <div class="settings-form">
+          <div class="setting-group">
+            <label data-i18n="settings.language">Language</label>
+            <div class="setting-row">
+              <select id="langSelect">
+                <option value="en">English</option>
+                <option value="pt">Portugu&ecirc;s (Portugal)</option>
+              </select>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label data-i18n="settings.saveLocation">Default Save Location</label>
+            <div class="setting-row">
+              <input type="text" id="saveDir" placeholder="C:\Users\You\Downloads" style="flex:1" />
+              <button class="btn btn-ghost" id="browseDirBtn">Browse</button>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>Download Prompt</label>
+            <div class="setting-row" style="cursor:pointer;" id="askDirToggleWrap">
+              <div class="debug-check" id="askDirCheck"></div>
+              <span style="font-size:13px;color:var(--text-dim);">Always ask where to save</span>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>After Download</label>
+            <div class="setting-row" style="cursor:pointer;" id="autoClearToggleSettings">
+              <div class="debug-check" id="autoClearCheckSettings"></div>
+              <span style="font-size:13px;color:var(--text-dim);">Auto-clear completed downloads from list</span>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>Display</label>
+            <div class="setting-row" style="cursor:pointer;" id="speedGraphToggleSettings">
+              <div class="debug-check" id="speedGraphCheckSettings"></div>
+              <span style="font-size:13px;color:var(--text-dim);">Show download speed graph</span>
+            </div>
+            <div class="setting-row" style="cursor:pointer;margin-top:4px;" id="speedStatsToggleSettings">
+              <div class="debug-check" id="speedStatsCheckSettings"></div>
+              <span style="font-size:13px;color:var(--text-dim);">Show network stats (Network, Peak, Disk)</span>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>Max Concurrent Downloads</label>
+            <div class="setting-row">
+              <input type="number" id="maxConcurrent" value="3" min="1" max="10" />
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>Speed Limit (KB/s, 0 = unlimited)</label>
+            <div class="setting-row">
+              <input type="number" id="speedLimit" value="0" min="0" />
+            </div>
+          </div>
+          <div style="height:1px;background:var(--border);margin:8px 0;"></div>
+          <div class="setting-group">
+            <label>Developer</label>
+            <div class="setting-row" style="cursor:pointer;" id="debugToggleWrap">
+              <div class="debug-check" id="debugCheck"></div>
+              <span style="font-size:13px;color:var(--text-dim);">Enable Debug Mode</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Debug Panel -->
+      <div id="panel-debug" class="panel">
+        <div class="debug-toolbar">
+          <div class="debug-filters">
+            <div class="debug-filter-btn active" data-level="info">INFO</div>
+            <div class="debug-filter-btn active" data-level="warn">WARN</div>
+            <div class="debug-filter-btn active" data-level="error">ERROR</div>
+            <div class="debug-filter-btn active" data-level="event">EVENT</div>
+          </div>
+          <input class="search-input" type="text" id="debugSearch" placeholder="Search logs..." style="width:160px;font-size:11px;padding:4px 8px;" />
+          <div class="spacer"></div>
+          <div class="export-wrap">
+            <button class="btn btn-ghost btn-sm" id="debugExportBtn">Export</button>
+            <div class="export-menu" id="debugExportMenu">
+              <button data-format="csv">Export as CSV</button>
+              <button data-format="txt">Export as TXT</button>
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="debugClearBtn">Clear</button>
+        </div>
+        <div class="debug-log" id="debugLog">
+          <div class="debug-empty">Debug mode enabled. Logs will appear here in real-time.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="global-footer">
+    <div class="footer-stats">
+      <span id="footerActive">0 active</span>
+      <span id="footerCompleted">0 completed</span>
+      <span id="footerSpeed"></span>
+    </div>
+    <div class="footer-links">
+      <span>Made by</span>
+      <a id="linkEerie" href="#">EERIE</a>
+      <span class="sep">|</span>
+      <a id="linkCoffee" href="#">Buy Me a Coffee</a>
+      <span class="sep">|</span>
+      <a id="linkIssue" href="#">Report Issue</a>
+      <span class="sep">|</span>
+      <a id="linkFeedback" href="#">Feedback</a>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+<script src="i18n.js" defer></script>
+<script src="main.js" defer></script>
+</body>
+</html>

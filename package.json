@@ -1,0 +1,18 @@
+{
+  "name": "net-reaper",
+  "version": "0.1.0",
+  "description": "A high-performance internet download manager",
+  "author": "EERIE",
+  "license": "MIT",
+  "scripts": {
+    "dev": "npx tauri dev",
+    "build": "npx tauri build",
+    "build:nsis": "npx tauri build --bundles nsis",
+    "build:appx": "npx tauri build --bundles appx",
+    "build:dmg": "npx tauri build --bundles dmg",
+    "build:appimage": "npx tauri build --bundles appimage"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
