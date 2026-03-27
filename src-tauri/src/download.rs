@@ -66,6 +66,9 @@ pub struct DownloadManager {
     client: Client,
     cancel_flags: Arc<Mutex<std::collections::HashMap<String, bool>>>,
     pause_flags: Arc<Mutex<std::collections::HashMap<String, bool>>>,
+    request_cookies: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    request_methods: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    request_referers: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 impl DownloadManager {
@@ -77,6 +80,16 @@ impl DownloadManager {
                 .default_headers({
                     let mut h = reqwest::header::HeaderMap::new();
                     h.insert(reqwest::header::ACCEPT_ENCODING, "identity".parse().unwrap());
+                    h.insert(reqwest::header::ACCEPT, "*/*".parse().unwrap());
+                    h.insert(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9".parse().unwrap());
+                    h.insert("Sec-Ch-Ua", "\"Chromium\";v=\"146\", \"Google Chrome\";v=\"146\", \"Not?A_Brand\";v=\"99\"".parse().unwrap());
+                    h.insert("Sec-Ch-Ua-Mobile", "?0".parse().unwrap());
+                    h.insert("Sec-Ch-Ua-Platform", "\"Windows\"".parse().unwrap());
+                    h.insert("Sec-Fetch-Dest", "document".parse().unwrap());
+                    h.insert("Sec-Fetch-Mode", "navigate".parse().unwrap());
+                    h.insert("Sec-Fetch-Site", "none".parse().unwrap());
+                    h.insert("Sec-Fetch-User", "?1".parse().unwrap());
+                    h.insert("Upgrade-Insecure-Requests", "1".parse().unwrap());
                     h
                 })
                 .no_gzip()
@@ -90,6 +103,9 @@ impl DownloadManager {
                 .expect("Failed to build HTTP client"),
             cancel_flags: Arc::new(Mutex::new(std::collections::HashMap::new())),
             pause_flags: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            request_cookies: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            request_methods: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            request_referers: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -136,8 +152,8 @@ impl DownloadManager {
     }
 
     /// Add a new download and return its ID
-    pub async fn add_download(&self, url: String, save_dir: String, custom_filename: Option<String>) -> Result<String, String> {
-        let (resolved_name, total_bytes) = self.resolve_filename(&url).await?;
+    pub async fn add_download(&self, url: String, save_dir: String, custom_filename: Option<String>, cookies: Option<String>, method: Option<String>, referer: Option<String>) -> Result<String, String> {
+        let (resolved_name, total_bytes) = self.resolve_filename(&url).await.unwrap_or_else(|_| ("download".to_string(), 0));
         let filename = custom_filename
             .filter(|n| !n.trim().is_empty())
             .unwrap_or(resolved_name);
@@ -162,6 +178,20 @@ impl DownloadManager {
             let mut flags = self.pause_flags.lock().await;
             flags.insert(id.clone(), false);
         }
+        if let Some(c) = cookies {
+            let mut cmap = self.request_cookies.lock().await;
+            cmap.insert(id.clone(), c);
+        }
+        if let Some(m) = method {
+            if m != "GET" {
+                let mut mmap = self.request_methods.lock().await;
+                mmap.insert(id.clone(), m);
+            }
+        }
+        if let Some(r) = referer {
+            let mut rmap = self.request_referers.lock().await;
+            rmap.insert(id.clone(), r);
+        }
 
         Ok(id)
     }
@@ -183,27 +213,89 @@ impl DownloadManager {
         // Update status to Downloading
         self.update_status(&id, DownloadStatus::Downloading).await;
 
-        let resp = self
-            .client
-            .get(&download.url)
+        // Use POST if the browser extension detected a non-GET method
+        let http_method = {
+            let mmap = self.request_methods.lock().await;
+            mmap.get(&id).cloned().unwrap_or_else(|| "GET".to_string())
+        };
+
+        // Build request with correct method
+        let mut req = match http_method.as_str() {
+            "POST" => self.client.post(&download.url),
+            "PUT" => self.client.put(&download.url),
+            _ => self.client.get(&download.url),
+        };
+
+        // Attach browser cookies if available (for Cloudflare-protected sites)
+        {
+            let cmap = self.request_cookies.lock().await;
+            if let Some(cookies) = cmap.get(&id) {
+                req = req.header("Cookie", cookies.as_str());
+            }
+        }
+        // Attach referer if captured from the browser request
+        {
+            let rmap = self.request_referers.lock().await;
+            if let Some(referer) = rmap.get(&id) {
+                req = req.header("Referer", referer.as_str());
+            }
+        }
+
+        let resp = req
             .send()
             .await
-            .map_err(|e| format!("GET request failed: {}", e))?;
+            .map_err(|e| format!("{} request failed: {}", http_method, e))?;
 
         // Check HTTP status before streaming
         let status = resp.status();
         if !status.is_success() {
             let code = status.as_u16();
-            let reason = match code {
-                401 => "Unauthorized — server requires authentication or cookies",
-                403 => "Forbidden — access denied by server",
-                404 => "Not Found — file does not exist at this URL",
-                410 => "Gone — file has been removed",
-                429 => "Too Many Requests — rate limited, try again later",
-                500..=599 => "Server error — try again later",
-                _ => "Unexpected error",
+
+            // Collect diagnostic headers
+            let server = resp.headers().get("server")
+                .and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+            let cf_ray = resp.headers().get("cf-ray")
+                .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+            let cf_cache = resp.headers().get("cf-cache-status")
+                .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+            let content_type = resp.headers().get("content-type")
+                .and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+
+            // Read a snippet of the response body for context
+            let body_snippet = resp.text().await.unwrap_or_default();
+            let is_cloudflare = server.to_lowercase().contains("cloudflare") || cf_ray.is_some();
+            let has_js_challenge = body_snippet.contains("challenge-platform")
+                || body_snippet.contains("jschl-answer")
+                || body_snippet.contains("Checking your browser")
+                || body_snippet.contains("Just a moment");
+            let has_captcha = body_snippet.contains("cf-turnstile")
+                || body_snippet.contains("hcaptcha")
+                || body_snippet.contains("recaptcha");
+
+            let mut detail = match code {
+                401 => "Unauthorized - server requires authentication or cookies".to_string(),
+                403 if is_cloudflare && has_js_challenge =>
+                    "Cloudflare JS challenge - this site requires browser verification. Use the browser extension to capture this download.".to_string(),
+                403 if is_cloudflare && has_captcha =>
+                    "Cloudflare CAPTCHA - this site requires human verification. Open the URL in your browser, complete the challenge, then use the browser extension.".to_string(),
+                403 if is_cloudflare =>
+                    "Cloudflare blocked - the server's firewall rejected this request. Try opening the URL in your browser first, then use the browser extension.".to_string(),
+                403 => "Forbidden - access denied by server".to_string(),
+                404 => "Not Found - file does not exist at this URL".to_string(),
+                410 => "Gone - file has been removed".to_string(),
+                429 => "Too Many Requests - rate limited, try again later or use a VPN to change your IP".to_string(),
+                500..=599 => "Server error - try again later".to_string(),
+                _ => "Unexpected error".to_string(),
             };
-            return Err(format!("HTTP {} — {}", code, reason));
+
+            // Append server info for diagnostics
+            let mut diag = vec![format!("server: {}", server)];
+            if let Some(ray) = cf_ray { diag.push(format!("cf-ray: {}", ray)); }
+            if let Some(cache) = cf_cache { diag.push(format!("cf-cache: {}", cache)); }
+            if content_type != "unknown" { diag.push(format!("content-type: {}", content_type)); }
+            detail.push_str(&format!(" [{}]", diag.join(", ")));
+
+            return Err(format!("HTTP {} - {}", code, detail));
         }
 
         let total = resp
@@ -245,7 +337,7 @@ impl DownloadManager {
         let downloads = self.downloads.clone();
 
         while let Some(chunk) = stream.next().await {
-            // Check cancel — read flag then drop lock immediately
+            // Check cancel - read flag then drop lock immediately
             let is_cancelled = {
                 let flags = cancel_flags.lock().await;
                 flags.get(&id).copied().unwrap_or(false)
@@ -261,7 +353,7 @@ impl DownloadManager {
                 return Ok(());
             }
 
-            // Check pause — read flag then drop lock immediately
+            // Check pause - read flag then drop lock immediately
             let is_paused = {
                 let flags = pause_flags.lock().await;
                 flags.get(&id).copied().unwrap_or(false)
@@ -274,7 +366,7 @@ impl DownloadManager {
                         on_progress(d);
                     }
                 }
-                // Wait until unpaused or cancelled — no locks held across sleep
+                // Wait until unpaused or cancelled - no locks held across sleep
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     let still_paused = {
@@ -303,13 +395,13 @@ impl DownloadManager {
                 Ok(c) => c,
                 Err(e) => {
                     let detail = if e.is_timeout() {
-                        "connection timed out — server stopped responding"
+                        "connection timed out - server stopped responding"
                     } else if e.is_connect() {
-                        "connection lost — network may be down"
+                        "connection lost - network may be down"
                     } else if e.is_body() {
                         "server sent corrupted/truncated data (body decode error)"
                     } else if e.is_decode() {
-                        "response decode error — content encoding mismatch"
+                        "response decode error - content encoding mismatch"
                     } else {
                         "unknown stream error"
                     };
@@ -321,7 +413,7 @@ impl DownloadManager {
                     } else {
                         format!(" after {}", crate::download::human_bytes(downloaded))
                     };
-                    return Err(format!("Stream failed{}: {} — {}", pct, detail, e));
+                    return Err(format!("Stream failed{}: {} - {}", pct, detail, e));
                 }
             };
             file.write_all(&chunk)

@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.eerie.net-reaper",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeBuildCommand": "cargo build --release --bin net-reaper-host && powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path binaries | Out-Null; Copy-Item target/release/net-reaper-host.exe binaries/net-reaper-host-x86_64-pc-windows-msvc.exe -Force\""
   },
   "app": {
     "withGlobalTauri": true,
@@ -29,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "appimage", "dmg"],
+    "externalBin": ["binaries/net-reaper-host"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,9 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "Net Reaper",
-  "description": "Send downloads to Net Reaper download manager",
-  "version": "0.1.0",
-  "permissions": ["downloads", "nativeMessaging"],
+  "name": "Net Reaper (Internet Download Manager)",
+  "description": "Intercept browser downloads and send them to Net Reaper for faster, resumable downloading with Cloudflare bypass.",
+  "version": "1.0.0",
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "storage",
+    "cookies",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -18,5 +27,8 @@
       "16": "icon-16.png",
       "48": "icon-48.png"
     }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
   }
 }

@@ -1,10 +1,15 @@
 mod commands;
 mod download;
+mod native_host_register;
 mod pipe;
 
 use download::DownloadManager;
 
 pub fn run() {
+    // Register native messaging host before starting the UI
+    // so the browser extension can connect immediately
+    native_host_register::register();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -20,6 +25,7 @@ pub fn run() {
             commands::get_downloads,
             commands::resolve_filename,
             commands::get_default_download_dir,
+            commands::show_in_folder,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

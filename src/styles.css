@@ -40,7 +40,11 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg); colo
 
 /* ── Panels ── */
 .panels { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding-top: 8px; }
-.panel  { display: none; flex-direction: column; flex: 1; min-height: 0; }
+.panel  { display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+.panel::-webkit-scrollbar { width: 6px; }
+.panel::-webkit-scrollbar-track { background: transparent; }
+.panel::-webkit-scrollbar-thumb { background: #3a3a42; border-radius: 3px; }
+.panel::-webkit-scrollbar-thumb:hover { background: #5a5a62; }
 .panel.active { display: flex; }
 
 /* ── Controls ── */
@@ -131,7 +135,7 @@ select:focus { border-color: var(--accent); }
 .dl-filename { font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .dl-size { font-family: var(--mono); font-size: 12px; color: var(--accent-h); white-space: nowrap; }
 .dl-speed { font-family: var(--mono); font-size: 11px; color: var(--success); white-space: nowrap; min-width: 80px; text-align: right; }
-.dl-eta { font-family: var(--mono); font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+.dl-eta { font-family: var(--mono); font-size: 10px; color: var(--text-dim); white-space: nowrap; min-width: 52px; text-align: right; }
 .dl-actions { display: flex; gap: 4px; align-items: center; }
 
 .dl-row-bottom { display: flex; align-items: center; gap: 10px; }
@@ -173,6 +177,8 @@ select:focus { border-color: var(--accent); }
 .footer-links a#linkFeedback { color: var(--text-dim); }
 .footer-links a#linkFeedback:hover { color: var(--success); }
 .footer-links .sep { color: var(--border); }
+.footer-ext-cta { font-size: 11px; color: var(--accent); cursor: pointer; text-decoration: none; transition: color 0.15s; font-weight: 500; white-space: nowrap; }
+.footer-ext-cta:hover { color: var(--accent-h); text-decoration: underline; }
 
 /* ── Settings Panel ── */
 .settings-form { padding: 20px; display: flex; flex-direction: column; gap: 16px; max-width: 500px; }
@@ -214,6 +220,9 @@ select:focus { border-color: var(--accent); }
 .history-filename { font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-meta { font-family: var(--mono); font-size: 11px; color: var(--text-dim); display: flex; gap: 12px; margin-top: 2px; }
 .history-url { font-family: var(--mono); font-size: 10px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; opacity: 0.6; }
+.history-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.history-open-folder { background: transparent; border: none; font-size: 16px; cursor: pointer; padding: 4px 6px; border-radius: 4px; transition: all 0.12s; flex-shrink: 0; opacity: 0.5; filter: grayscale(1); }
+.history-open-folder:hover { opacity: 1; filter: none; background: rgba(99,102,241,0.08); }
 .history-redownload { background: transparent; border: none; color: var(--accent-h); font-family: var(--mono); font-size: 11px; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: all 0.12s; flex-shrink: 0; }
 .history-redownload:hover { background: rgba(99,102,241,0.12); }
 
@@ -282,6 +291,19 @@ select:focus { border-color: var(--accent); }
 .toast.success .toast-icon { color: var(--success); }
 @keyframes toastIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(12px); } }
+
+/* ── Setting Tooltip ── */
+.setting-tooltip { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim); font-size: 10px; font-weight: 600; cursor: help; margin-left: 5px; position: relative; vertical-align: middle; flex-shrink: 0; }
+.setting-tooltip::after { content: attr(data-tip); position: absolute; left: 20px; top: 50%; transform: translateY(-50%); background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-size: 11px; padding: 7px 10px; border-radius: 6px; width: 240px; white-space: normal; line-height: 1.5; z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+.setting-tooltip:hover::after { opacity: 1; }
+
+/* ── Extension CTA ── */
+.ext-cta { display: flex; align-items: center; gap: 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-top: 4px; }
+.ext-cta-text { flex: 1; min-width: 0; }
+.ext-cta-text strong { display: block; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.ext-cta-text span { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.ext-cta-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.ext-cta .btn { flex-shrink: 0; }
 
 /* ── Animations ── */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }

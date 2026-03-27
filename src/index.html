@@ -168,6 +168,12 @@
               <div class="debug-check" id="speedStatsCheckSettings"></div>
               <span style="font-size:13px;color:var(--text-dim);">Show network stats (Network, Peak, Disk)</span>
             </div>
+            <div class="setting-row" style="cursor:pointer;margin-top:4px;" id="smoothSpeedToggleSettings">
+              <div class="debug-check" id="smoothSpeedCheckSettings"></div>
+              <span style="font-size:13px;color:var(--text-dim);">Smooth speed &amp; ETA
+                <span class="setting-tooltip" data-tip="Raw mode shows the exact speed measured every 100 ms - it can jump around due to network bursts. Smooth mode applies a rolling average for a steadier reading and a stable ETA, similar to Windows download dialogs.">?</span>
+              </span>
+            </div>
           </div>
           <div class="setting-group">
             <label>Max Concurrent Downloads</label>
@@ -179,6 +185,20 @@
             <label>Speed Limit (KB/s, 0 = unlimited)</label>
             <div class="setting-row">
               <input type="number" id="speedLimit" value="0" min="0" />
+            </div>
+          </div>
+          <div style="height:1px;background:var(--border);margin:8px 0;"></div>
+          <div class="setting-group">
+            <label>Browser Integration</label>
+            <div class="ext-cta">
+              <div class="ext-cta-text">
+                <strong>Capture downloads from your browser</strong>
+                <span>The browser extension intercepts downloads directly from Chrome, Brave, or Edge and routes them through Net Reaper. This bypasses Cloudflare protection and lets you manage, queue, and resume downloads in one place.</span>
+              </div>
+              <div class="ext-cta-actions">
+                <button class="btn btn-accent btn-sm" id="extDownloadBtn">Install Extension</button>
+                <button class="btn btn-ghost btn-sm" id="extSetupBtn">Setup Guide</button>
+              </div>
             </div>
           </div>
           <div style="height:1px;background:var(--border);margin:8px 0;"></div>
@@ -225,6 +245,7 @@
       <span id="footerActive">0 active</span>
       <span id="footerCompleted">0 completed</span>
       <span id="footerSpeed"></span>
+      <a class="footer-ext-cta" id="footerExtLink" href="#" title="Capture downloads directly from your browser - bypasses Cloudflare and other protections">&#9889; Capture browser downloads</a>
     </div>
     <div class="footer-links">
       <span>Made by</span>

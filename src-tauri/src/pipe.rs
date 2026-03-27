@@ -7,6 +7,12 @@ pub struct BrowserDownloadRequest {
     pub url: String,
     pub filename: Option<String>,
     pub filesize: Option<u64>,
+    #[serde(default)]
+    pub cookies: Option<String>,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub referer: Option<String>,
 }
 
 /// Listen on a Windows named pipe for download requests from the browser extension's native messaging host.

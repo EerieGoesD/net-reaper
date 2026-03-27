@@ -9,8 +9,11 @@ pub async fn add_download(
     save_dir: String,
     filename: Option<String>,
     auto_start: bool,
+    cookies: Option<String>,
+    method: Option<String>,
+    referer: Option<String>,
 ) -> Result<String, String> {
-    let id = state.add_download(url, save_dir, filename).await?;
+    let id = state.add_download(url, save_dir, filename, cookies, method, referer).await?;
 
     if auto_start {
         start_download_task(state.inner().clone(), id.clone(), app);
@@ -97,6 +100,38 @@ pub async fn resolve_filename(
     url: String,
 ) -> Result<(String, u64), String> {
     state.resolve_filename(&url).await
+}
+
+#[tauri::command]
+pub async fn show_in_folder(path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(&path);
+    let folder = if path.is_file() {
+        path.parent().unwrap_or(&path).to_path_buf()
+    } else {
+        path
+    };
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(folder.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(folder.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(folder.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|e| format!("Failed to open file manager: {}", e))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -4,7 +4,7 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    width: 260px;
+    width: 300px;
     background: #0a0a0c;
     color: #d4d4d8;
     font-family: 'Segoe UI', system-ui, sans-serif;
@@ -53,6 +53,60 @@
   }
   .status.connected { color: #22c55e; }
   .status.disconnected { color: #ef4444; }
+
+  .log-section {
+    margin-top: 12px;
+    border-top: 1px solid #222228;
+    padding-top: 8px;
+  }
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .log-title { font-size: 11px; font-weight: 600; color: #63636e; text-transform: uppercase; letter-spacing: 0.5px; }
+  .log-actions { display: flex; gap: 4px; }
+  .log-btn { font-size: 10px; color: #63636e; background: none; border: 1px solid #222228; border-radius: 4px; padding: 2px 6px; cursor: pointer; transition: all 0.15s; }
+  .log-btn:hover { color: #d4d4d8; border-color: #333; }
+  .log-btn.copied { color: #22c55e; border-color: #22c55e; }
+  .log {
+    max-height: 180px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'JetBrains Mono', monospace;
+    font-size: 10px;
+    line-height: 1.6;
+    color: #8b8b96;
+    word-break: break-all;
+  }
+  .log::-webkit-scrollbar { width: 4px; }
+  .log::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+  .log .error { color: #ef4444; }
+  .log .warn { color: #eab308; }
+  .log-empty { color: #3f3f46; font-style: italic; }
+
+  .footer {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid #222228;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 10px;
+    flex-wrap: wrap;
+  }
+  .footer span { color: #63636e; }
+  .footer a { text-decoration: none; cursor: pointer; transition: color 0.15s; font-weight: 600; }
+  .footer a.link-eerie { color: #818cf8; }
+  .footer a.link-eerie:hover { color: #fff; }
+  .footer a.link-coffee { color: #eab308; }
+  .footer a.link-coffee:hover { color: #f0d060; }
+  .footer a.link-issue { color: #63636e; }
+  .footer a.link-issue:hover { color: #ef4444; }
+  .footer a.link-feedback { color: #63636e; }
+  .footer a.link-feedback:hover { color: #22c55e; }
+  .footer .sep { color: #222228; }
 </style>
 </head>
 <body>
@@ -73,6 +127,29 @@
   </div>
 
   <div class="status" id="status">Checking...</div>
+
+  <div class="log-section">
+    <div class="log-header">
+      <span class="log-title">Debug Log</span>
+      <div class="log-actions">
+        <button class="log-btn" id="copyLog" title="Copy logs to clipboard">Copy</button>
+        <button class="log-btn" id="exportLog" title="Export logs as .txt file">Export</button>
+        <button class="log-btn" id="clearLog" title="Clear all logs">Clear</button>
+      </div>
+    </div>
+    <div class="log" id="log"><span class="log-empty">No events yet</span></div>
+  </div>
+
+  <div class="footer">
+    <span>Made by</span>
+    <a class="link-eerie" href="https://eeriegoesd.com" target="_blank">EERIE</a>
+    <span class="sep">|</span>
+    <a class="link-coffee" href="https://buymeacoffee.com/eeriegoesd" target="_blank">Buy Me a Coffee</a>
+    <span class="sep">|</span>
+    <a class="link-issue" href="https://github.com/EerieGoesD/net-reaper/issues" target="_blank">Report Issue</a>
+    <span class="sep">|</span>
+    <a class="link-feedback" href="https://github.com/EerieGoesD/net-reaper/discussions" target="_blank">Feedback</a>
+  </div>
 
   <script src="popup.js"></script>
 </body>

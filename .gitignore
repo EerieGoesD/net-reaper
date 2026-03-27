@@ -140,8 +140,10 @@ vite.config.ts.timestamp-*
 
 # Tauri / Rust
 src-tauri/target/
+src-tauri/binaries/
 *.exe
 *.msi
 *.appx
 *.dmg
 *.AppImage
+browser-extension/net-reaper-extension.zip

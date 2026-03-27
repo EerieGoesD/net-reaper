@@ -8,6 +8,7 @@ let defaultSaveDir = '';
 let lastSaveDir = localStorage.getItem('nr_lastSaveDir') || '';
 let skipAskDir = localStorage.getItem('nr_skipAskDir') === 'true';
 let debugMode = localStorage.getItem('nr_debugMode') === 'true';
+let smoothSpeedEta = localStorage.getItem('nr_smoothSpeed') === 'true';
 let autoClearCompleted = localStorage.getItem('nr_autoClear') === 'true';
 const debugFilters = { info: true, warn: true, error: true, event: true };
 
@@ -215,7 +216,7 @@ function showToast(type, title, msg, duration = 6000) {
     <div class="toast-icon">${icons[type] || icons.info}</div>
     <div class="toast-body">
       <div class="toast-title">${escapeHtml(title)}</div>
-      <div class="toast-msg">${escapeHtml(msg)}</div>
+      <div class="toast-msg">${escapeHtml(msg).replace(/\n/g, '<br>')}</div>
     </div>
     <button class="toast-close">&times;</button>
   `;
@@ -357,14 +358,24 @@ function renderHistory() {
       <div class="history-info">
         <div class="history-filename">${escapeHtml(h.filename || 'Unknown')}</div>
         <div class="history-meta">
-          <span>${h.size > 0 ? formatBytes(h.size) : '—'}</span>
+          <span>${h.size > 0 ? formatBytes(h.size) : '-'}</span>
           <span>${dateStr}</span>
           <span>${h.status}</span>
         </div>
         <div class="history-url">${escapeHtml(h.url)}</div>
       </div>
-      <button class="history-redownload" title="Download again">Redownload</button>
+      <div class="history-actions">
+        ${h.save_path ? '<button class="history-open-folder" title="Open file location">&#128194;</button>' : ''}
+        <button class="history-redownload" title="Download again">Redownload</button>
+      </div>
     `;
+
+    const openFolderBtn = el.querySelector('.history-open-folder');
+    if (openFolderBtn) {
+      openFolderBtn.addEventListener('click', () => {
+        invoke('show_in_folder', { path: h.save_path });
+      });
+    }
 
     el.querySelector('.history-redownload').addEventListener('click', () => {
       urlInput.value = h.url;
@@ -513,21 +524,50 @@ function createDownloadElement(d) {
     dbg('info', `Resume clicked: ${d.id} (${d.filename || 'unknown'})`);
     invoke('resume_download', { id: d.id });
   });
-  el.querySelector('.btn-cancel').addEventListener('click', (e) => {
+  el.querySelector('.btn-cancel').addEventListener('click', async (e) => {
     e.stopPropagation();
     dbg('warn', `Cancel clicked: ${d.id} (${d.filename || 'unknown'})`);
+    // Queued downloads aren't in the download loop, so cancel_download flag is never read.
+    // Remove them directly instead.
+    if (d.status === 'Queued') {
+      await invoke('remove_download', { id: d.id });
+      downloads = downloads.filter(dl => dl.id !== d.id);
+      render();
+      return;
+    }
     invoke('cancel_download', { id: d.id });
   });
-  el.querySelector('.btn-retry').addEventListener('click', (e) => {
+  el.querySelector('.btn-retry').addEventListener('click', async (e) => {
     e.stopPropagation();
-    dbg('info', `Retry clicked: ${d.id} (${d.filename || 'unknown'})`);
-    invoke('retry_download', { id: d.id });
+    const retryUrl = d.url;
+    const retryFilename = d.filename;
+    const retryDir = d.save_path.replace(/[\\/][^\\/]+$/, '');
+    dbg('info', `Retry clicked: ${d.id} (${retryFilename}) - removing old and re-adding`);
+    try {
+      await invoke('remove_download', { id: d.id });
+      downloads = downloads.filter(dl => dl.id !== d.id);
+      delete _smoothedSpeeds[d.id];
+
+      const max = getMaxConcurrent();
+      const active = getActiveCount();
+      const autoStart = active < max;
+      const newId = await invoke('add_download', {
+        url: retryUrl, saveDir: retryDir, filename: retryFilename, autoStart, cookies: null, method: null, referer: null,
+      });
+      dbg('event', `Retry created new download: ${newId}`);
+      downloads = await invoke('get_downloads');
+      render();
+    } catch (err) {
+      dbg('error', `Retry failed: ${err}`);
+      showToast('error', 'Retry failed', String(err));
+    }
   });
   el.querySelector('.btn-remove').addEventListener('click', (e) => {
     e.stopPropagation();
     dbg('info', `Remove clicked: ${d.id}`);
     invoke('remove_download', { id: d.id });
     downloads = downloads.filter(dl => dl.id !== d.id);
+    delete _smoothedSpeeds[d.id];
     render();
   });
 
@@ -552,11 +592,14 @@ function updateDownloadElement(el, d) {
   el.querySelector('.dl-size').textContent = sizeText;
 
   // Speed + ETA
+  const displaySpeed = d.status === 'Downloading' && smoothSpeedEta
+    ? (_smoothedSpeeds[d.id] ?? d.speed_bps)
+    : d.speed_bps;
   el.querySelector('.dl-speed').textContent =
-    d.status === 'Downloading' ? formatSpeed(d.speed_bps) : '';
+    d.status === 'Downloading' ? formatSpeed(displaySpeed) : '';
   const remaining = (d.total_bytes || 0) - (d.downloaded_bytes || 0);
   el.querySelector('.dl-eta').textContent =
-    d.status === 'Downloading' ? formatEta(remaining, d.speed_bps) : '';
+    d.status === 'Downloading' ? formatEta(remaining, displaySpeed) : '';
 
   // Status badge
   const badge = el.querySelector('.dl-status');
@@ -582,10 +625,17 @@ function updateDownloadElement(el, d) {
   el.querySelector('.btn-remove').style.display = isDone ? '' : 'none';
 }
 
+// ── Overall progress: remember bytes from completed downloads so % never drops ──
+let _completedBytes = 0;      // accumulated total_bytes of downloads that left the active list
+let _completedDownloaded = 0;  // accumulated downloaded_bytes (should equal _completedBytes)
+const _trackedIds = new Set(); // IDs currently counted in overall progress
+
 // ── Speed Graph ──
 let showSpeedGraph = localStorage.getItem('nr_speedGraph') !== 'false';
 let showSpeedStats = localStorage.getItem('nr_speedStats') !== 'false';
 const speedHistory = [];
+const _smoothedSpeeds = {};
+const SMOOTH_ALPHA = 0.2;
 const SPEED_HISTORY_MAX = 60;
 let _graphRafPending = false;
 let _lastSampleTime = 0;
@@ -600,12 +650,17 @@ let _lastDiskCalcTime = 0;
   const statsCheck = $('#speedStatsCheckSettings');
   const statsWrap = $('#speedStatsToggleSettings');
 
+  const smoothCheck = $('#smoothSpeedCheckSettings');
+  const smoothWrap = $('#smoothSpeedToggleSettings');
+
   function apply() {
     check.classList.toggle('on', showSpeedGraph);
     check.innerHTML = showSpeedGraph ? '&#10003;' : '';
     statsCheck.classList.toggle('on', showSpeedStats);
     statsCheck.innerHTML = showSpeedStats ? '&#10003;' : '';
     $('.speed-graph-stats').style.display = showSpeedStats ? '' : 'none';
+    smoothCheck.classList.toggle('on', smoothSpeedEta);
+    smoothCheck.innerHTML = smoothSpeedEta ? '&#10003;' : '';
   }
   apply();
 
@@ -620,6 +675,12 @@ let _lastDiskCalcTime = 0;
     localStorage.setItem('nr_speedStats', showSpeedStats);
     apply();
   });
+
+  smoothWrap.addEventListener('click', () => {
+    smoothSpeedEta = !smoothSpeedEta;
+    localStorage.setItem('nr_smoothSpeed', smoothSpeedEta);
+    apply();
+  });
 })();
 
 function updateSpeedGraph() {
@@ -629,7 +690,7 @@ function updateSpeedGraph() {
   const now = Date.now();
   const totalSpeed = downloads
     .filter(d => d.status === 'Downloading')
-    .reduce((sum, d) => sum + (d.speed_bps || 0), 0);
+    .reduce((sum, d) => sum + (smoothSpeedEta ? (_smoothedSpeeds[d.id] ?? d.speed_bps) : d.speed_bps || 0), 0);
 
   // Track peak
   if (totalSpeed > _peakSpeed) _peakSpeed = totalSpeed;
@@ -720,7 +781,7 @@ function drawGraph(currentSpeed) {
   ctx.lineWidth = 0.5;
   // Bottom line (0)
   ctx.beginPath(); ctx.moveTo(0, h - padBot); ctx.lineTo(w, h - padBot); ctx.stroke();
-  // Top line (peak) — dashed yellow
+  // Top line (peak) - dashed yellow
   ctx.setLineDash([3, 3]);
   ctx.strokeStyle = 'rgba(234,179,8,0.2)';
   ctx.beginPath(); ctx.moveTo(0, padTop); ctx.lineTo(w, padTop); ctx.stroke();
@@ -775,7 +836,7 @@ function updateFooter() {
   const completed = downloads.filter(d => d.status === 'Completed').length;
   const totalSpeed = downloads
     .filter(d => d.status === 'Downloading')
-    .reduce((sum, d) => sum + (d.speed_bps || 0), 0);
+    .reduce((sum, d) => sum + (smoothSpeedEta ? (_smoothedSpeeds[d.id] ?? d.speed_bps) : d.speed_bps || 0), 0);
 
   footerActive.textContent = `${active} ${t('footer.active')}`;
   footerCompleted.textContent = `${completed} ${t('footer.completed')}`;
@@ -797,15 +858,41 @@ function updateOverallProgress() {
     d.status === 'Downloading' || d.status === 'Queued' || d.status === 'Paused'
   );
 
+  // Track IDs - when one leaves (completed/cleared), bank its bytes so % never drops
+  const currentIds = new Set(tracked.map(d => d.id));
+  for (const id of _trackedIds) {
+    if (!currentIds.has(id)) {
+      // This download left the active list - find its last known state
+      const gone = downloads.find(d => d.id === id);
+      if (gone) {
+        _completedBytes += gone.total_bytes || 0;
+        _completedDownloaded += gone.downloaded_bytes || 0;
+      }
+      _trackedIds.delete(id);
+    }
+  }
+  for (const id of currentIds) _trackedIds.add(id);
+
+  if (tracked.length === 0 && _completedBytes === 0) {
+    wrap.style.display = 'none';
+    return;
+  }
+
+  // Reset banked bytes once everything is done
   if (tracked.length === 0) {
+    _completedBytes = 0;
+    _completedDownloaded = 0;
+    _trackedIds.clear();
     wrap.style.display = 'none';
     return;
   }
 
   wrap.style.display = '';
 
-  const totalBytes = tracked.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
-  const downloadedBytes = tracked.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
+  const activeTotalBytes = tracked.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
+  const activeDownloadedBytes = tracked.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
+  const totalBytes = activeTotalBytes + _completedBytes;
+  const downloadedBytes = activeDownloadedBytes + _completedDownloaded;
   const percent = totalBytes > 0 ? (downloadedBytes / totalBytes) * 100 : 0;
   const downloading = tracked.filter(d => d.status === 'Downloading').length;
   const queued = tracked.filter(d => d.status === 'Queued').length;
@@ -815,10 +902,10 @@ function updateOverallProgress() {
   if (downloading > 0) parts.push(`${downloading} ${t('overall.downloading')}`);
   if (queued > 0) parts.push(`${queued} ${t('overall.queued')}`);
   if (paused > 0) parts.push(`${paused} ${t('overall.paused')}`);
-  const totalSpeed = tracked.filter(d => d.status === 'Downloading').reduce((s, d) => s + (d.speed_bps || 0), 0);
+  const totalSpeed = tracked.filter(d => d.status === 'Downloading').reduce((s, d) => s + (smoothSpeedEta ? (_smoothedSpeeds[d.id] ?? d.speed_bps) : d.speed_bps || 0), 0);
   const overallRemaining = totalBytes - downloadedBytes;
   const etaStr = formatEta(overallRemaining, totalSpeed);
-  text.textContent = `${parts.join(', ')} — ${formatBytes(downloadedBytes)} / ${totalBytes > 0 ? formatBytes(totalBytes) : '?'}${etaStr ? ' — ' + etaStr + ' ' + t('overall.remaining') : ''}`;
+  text.textContent = `${parts.join(', ')} - ${formatBytes(downloadedBytes)} / ${totalBytes > 0 ? formatBytes(totalBytes) : '?'}${etaStr ? ' - ' + etaStr + ' ' + t('overall.remaining') : ''}`;
   pct.textContent = totalBytes > 0 ? `${percent.toFixed(1)}%` : '';
 
   bar.style.width = percent + '%';
@@ -934,16 +1021,21 @@ function getActiveCount() {
   return downloads.filter(d => d.status === 'Downloading').length;
 }
 
+let _startingQueued = false;
 async function tryStartQueued() {
-  const max = getMaxConcurrent();
-  const active = getActiveCount();
-  const queued = downloads.filter(d => d.status === 'Queued');
-  const slotsAvailable = max - active;
-
-  for (let i = 0; i < Math.min(slotsAvailable, queued.length); i++) {
-    const d = queued[i];
-    dbg('info', `Starting queued download: ${d.filename || d.id} (slot ${active + i + 1}/${max})`);
-    await invoke('start_queued_download', { id: d.id });
+  if (_startingQueued) return; // prevent concurrent calls from racing
+  _startingQueued = true;
+  try {
+    const max = getMaxConcurrent();
+    const queued = downloads.filter(d => d.status === 'Queued');
+    for (const d of queued) {
+      const active = getActiveCount(); // re-check each iteration
+      if (active >= max) break;
+      dbg('info', `Starting queued download: ${d.filename || d.id} (slot ${active + 1}/${max})`);
+      await invoke('start_queued_download', { id: d.id });
+    }
+  } finally {
+    _startingQueued = false;
   }
 }
 
@@ -953,15 +1045,20 @@ async function addDownload() {
   if (!url) return;
   dbg('info', `Add download requested: ${url}`);
 
-  // Resolve filename from URL/headers
+  // Resolve filename - skip the HEAD request if the browser extension already provided one
   let resolvedFilename = 'download';
-  try {
-    dbg('info', 'Resolving filename...');
-    const [name] = await invoke('resolve_filename', { url });
-    resolvedFilename = name || 'download';
-    dbg('info', `Resolved filename: ${resolvedFilename}`);
-  } catch (e) {
-    dbg('warn', `Could not resolve filename: ${e}`);
+  if (_pendingBrowserDownload?.filename) {
+    resolvedFilename = _pendingBrowserDownload.filename;
+    dbg('info', `Using filename from browser extension: ${resolvedFilename}`);
+  } else {
+    try {
+      dbg('info', 'Resolving filename...');
+      const [name] = await invoke('resolve_filename', { url });
+      resolvedFilename = name || 'download';
+      dbg('info', `Resolved filename: ${resolvedFilename}`);
+    } catch (e) {
+      dbg('warn', `Could not resolve filename: ${e}`);
+    }
   }
 
   let saveDir, filename;
@@ -990,8 +1087,11 @@ async function addDownload() {
     // Only pass filename if user changed it
     const customFilename = (filename && filename !== resolvedFilename) ? filename : null;
 
-    dbg('info', `Invoking add_download: url=${url}, dir=${saveDir}, file=${filename}, autoStart=${autoStart} (${active}/${max} active)`);
-    const id = await invoke('add_download', { url, saveDir, filename: customFilename, autoStart });
+    const cookies = _pendingBrowserDownload?.cookies || null;
+    const method = _pendingBrowserDownload?.method || null;
+    const referer = _pendingBrowserDownload?.referer || null;
+    dbg('info', `Invoking add_download: url=${url}, dir=${saveDir}, file=${filename}, autoStart=${autoStart} (${active}/${max} active)${cookies ? ' (with cookies)' : ''}${method && method !== 'GET' ? ` (method=${method})` : ''}${referer ? ' (has referer)' : ''}`);
+    const id = await invoke('add_download', { url, saveDir, filename: customFilename, autoStart, cookies, method, referer });
     dbg('event', `Download created with id: ${id}${autoStart ? '' : ' (queued)'}`);
     const allDownloads = await invoke('get_downloads');
     downloads = allDownloads;
@@ -1057,9 +1157,11 @@ browseDirBtn.addEventListener('click', async () => {
 });
 
 // ── Listen for browser extension downloads ──
+let _pendingBrowserDownload = null; // { cookies, filename, filesize, method, referer }
+
 listen('browser-download', async (event) => {
   const req = event.payload;
-  dbg('event', `Browser extension intercepted download: ${req.url}`);
+  dbg('event', `Browser extension intercepted download: ${req.url}${req.cookies ? ' (with cookies)' : ''}`);
 
   // Switch to downloads panel
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -1069,9 +1171,17 @@ listen('browser-download', async (event) => {
   const dlPanel = document.getElementById('panel-downloads');
   if (dlPanel) dlPanel.classList.add('active');
 
-  // Pre-fill URL and trigger the save dialog
+  // Store browser context so addDownload() can use it
+  _pendingBrowserDownload = {
+    cookies: req.cookies || null,
+    filename: req.filename || null,
+    filesize: req.filesize || null,
+    method: req.method || null,
+    referer: req.referer || null,
+  };
   urlInput.value = req.url;
   await addDownload();
+  _pendingBrowserDownload = null;
 });
 
 // ── Listen for progress events from Rust ──
@@ -1089,7 +1199,7 @@ listen('download-progress', (event) => {
       dbg('event', `Download completed: ${updated.filename} (${formatBytes(updated.downloaded_bytes)})`);
       showToast('success', t('toast.complete'), updated.filename);
     } else if (updated.status === 'Failed') {
-      dbg('error', `Download failed: ${updated.filename} — ${updated.error || 'unknown error'}`);
+      dbg('error', `Download failed: ${updated.filename} - ${updated.error || 'unknown error'}`);
       showToast('error', `${t('toast.failed')}: ${updated.filename}`, updated.error || 'Unknown error', 10000);
     } else if (updated.status === 'Cancelled') {
       dbg('warn', `Download cancelled: ${updated.filename}`);
@@ -1111,6 +1221,7 @@ listen('download-progress', (event) => {
           dbg('info', `Auto-clearing completed download: ${updated.filename}`);
           await invoke('remove_download', { id: updated.id });
           downloads = downloads.filter(d => d.id !== updated.id);
+          delete _smoothedSpeeds[updated.id];
           render();
         }, 500);
       }
@@ -1123,8 +1234,22 @@ listen('download-progress', (event) => {
   } else {
     downloads.push(updated);
   }
+
+  // Update EMA smoothed speed
+  if (updated.status === 'Downloading') {
+    const prev = _smoothedSpeeds[updated.id];
+    _smoothedSpeeds[updated.id] = prev !== undefined
+      ? Math.round(SMOOTH_ALPHA * updated.speed_bps + (1 - SMOOTH_ALPHA) * prev)
+      : updated.speed_bps;
+  } else if (updated.status === 'Completed' || updated.status === 'Cancelled' || updated.status === 'Failed') {
+    delete _smoothedSpeeds[updated.id];
+  }
+
   render();
 });
+
+// ── Disable browser right-click context menu ──
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ── Init ──
 async function init() {
@@ -1147,6 +1272,27 @@ async function init() {
   }
   dbg('info', 'Init complete');
 }
+
+// ── Browser Extension CTA ──
+function showExtensionSetupGuide() {
+  showToast('info', 'Browser Extension Setup', [
+    '1. Install the Net Reaper extension from the Chrome Web Store',
+    '2. Make sure Net Reaper is running (it registers automatically)',
+    '3. Restart your browser once after the first install',
+    '4. Click the Net Reaper icon in the toolbar to verify it says "connected"',
+  ].join('\n'), 15000);
+}
+// TODO: replace with real Chrome Web Store URL when extension is published
+const EXT_STORE_URL = 'https://github.com/EerieGoesD/net-reaper#browser-extension';
+
+document.getElementById('extDownloadBtn')?.addEventListener('click', () => {
+  window.__TAURI__.shell.open(EXT_STORE_URL);
+});
+document.getElementById('extSetupBtn')?.addEventListener('click', showExtensionSetupGuide);
+document.getElementById('footerExtLink')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  window.__TAURI__.shell.open(EXT_STORE_URL);
+});
 
 // ── Footer Links (open externally) ──
 document.getElementById('linkEerie').addEventListener('click', (e) => {
