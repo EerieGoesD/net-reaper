@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A high-performance internet download manager"
 authors = ["EERIE"]
 edition = "2021"
+default-run = "net-reaper"
 
 [lib]
 name = "net_reaper_lib"
