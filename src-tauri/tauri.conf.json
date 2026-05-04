@@ -1,11 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-utils/schema.json",
   "productName": "Net Reaper",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "identifier": "com.eerie.net-reaper",
   "build": {
     "frontendDist": "../src",
-    "beforeBuildCommand": "cargo build --release --bin net-reaper-host && powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path binaries | Out-Null; Copy-Item target/release/net-reaper-host.exe binaries/net-reaper-host-x86_64-pc-windows-msvc.exe -Force\""
+    "beforeBuildCommand": "cd src-tauri && cargo build --release --bin net-reaper-host && powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path binaries | Out-Null; Copy-Item target/release/net-reaper-host.exe binaries/net-reaper-host-x86_64-pc-windows-msvc.exe -Force\""
   },
   "app": {
     "withGlobalTauri": true,

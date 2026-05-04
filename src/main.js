@@ -1,5 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+const clipboardManager = window.__TAURI__.clipboardManager;
 
 // ── State ──
 let downloads = [];
@@ -10,7 +11,65 @@ let skipAskDir = localStorage.getItem('nr_skipAskDir') === 'true';
 let debugMode = localStorage.getItem('nr_debugMode') === 'true';
 let smoothSpeedEta = localStorage.getItem('nr_smoothSpeed') === 'true';
 let autoClearCompleted = localStorage.getItem('nr_autoClear') === 'true';
+let clipboardMonitor = localStorage.getItem('nr_clipMon') === 'true';
 const debugFilters = { info: true, warn: true, error: true, event: true };
+
+// Per-domain / per-extension routing rules. Each rule: { pattern, folder }
+// Pattern matches a domain (substring of hostname) or an extension (".mp4" or "mp4").
+function getRules() {
+  try { return JSON.parse(localStorage.getItem('nr_rules') || '[]'); }
+  catch { return []; }
+}
+function saveRules(rules) {
+  localStorage.setItem('nr_rules', JSON.stringify(rules));
+}
+
+function ruleMatchesUrl(rule, url, filename) {
+  if (!rule || !rule.pattern) return false;
+  const p = rule.pattern.trim().toLowerCase();
+  if (!p) return false;
+  // Extension match: ".mp4" or "mp4"
+  if (p.startsWith('.') || /^[a-z0-9]{2,5}$/.test(p)) {
+    const ext = p.replace(/^\./, '');
+    const name = (filename || url.split('/').pop() || '').toLowerCase().split('?')[0];
+    return name.endsWith('.' + ext);
+  }
+  // Domain match: substring of hostname
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host.includes(p);
+  } catch {
+    return false;
+  }
+}
+
+function findMatchingRule(url, filename) {
+  const rules = getRules();
+  for (const r of rules) {
+    if (ruleMatchesUrl(r, url, filename)) return r;
+  }
+  return null;
+}
+
+function isHlsUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.pathname.toLowerCase().endsWith('.m3u8') || u.pathname.toLowerCase().includes('.m3u8');
+  } catch {
+    return /\.m3u8(\?|$)/i.test(url);
+  }
+}
+
+function deriveHlsFilename(url) {
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split('/').filter(Boolean).pop() || 'video';
+    const base = last.replace(/\.m3u8.*$/i, '').replace(/[^\w.\-]/g, '_') || 'video';
+    return base + '.mp4';
+  } catch {
+    return 'video.mp4';
+  }
+}
 
 // ── DOM ──
 const $ = (s) => document.querySelector(s);
@@ -27,6 +86,8 @@ const footerCompleted = $('#footerCompleted');
 const footerSpeed = $('#footerSpeed');
 const saveDirInput = $('#saveDir');
 const browseDirBtn = $('#browseDirBtn');
+const scheduleInput = $('#scheduleInput');
+const scheduleClearBtn = $('#scheduleClearBtn');
 
 // ── Navigation ──
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -258,6 +319,213 @@ function showToast(type, title, msg, duration = 6000) {
   if (wrapDl) wrapDl.addEventListener('click', toggle);
   if (wrapSettings) wrapSettings.addEventListener('click', toggle);
 })();
+
+// ── Schedule input ──
+(function initScheduleInput() {
+  if (!scheduleInput || !scheduleClearBtn) return;
+  function update() {
+    const has = !!scheduleInput.value;
+    scheduleInput.classList.toggle('has-value', has);
+    scheduleClearBtn.style.display = has ? '' : 'none';
+  }
+  scheduleInput.addEventListener('change', update);
+  scheduleClearBtn.addEventListener('click', () => {
+    scheduleInput.value = '';
+    update();
+  });
+  update();
+})();
+
+// ── Segments setting ──
+(function initSegmentsSetting() {
+  const input = $('#segments');
+  if (!input) return;
+  const saved = localStorage.getItem('nr_segments');
+  if (saved !== null) input.value = saved;
+  input.addEventListener('change', async () => {
+    const parsed = parseInt(input.value, 10);
+    let n = Math.max(1, Math.min(16, Number.isFinite(parsed) ? parsed : 8));
+    input.value = n;
+    localStorage.setItem('nr_segments', String(n));
+    try { await invoke('set_segments', { count: n }); } catch (e) { dbg('error', `set_segments failed: ${e}`); }
+    dbg('info', `Parallel segments set to ${n}`);
+  });
+})();
+
+// ── Clipboard monitor ──
+(function initClipboardMonitor() {
+  const wrap = $('#clipMonToggleWrap');
+  const check = $('#clipMonCheck');
+  if (!wrap || !check) return;
+  function apply() {
+    check.classList.toggle('on', clipboardMonitor);
+    check.innerHTML = clipboardMonitor ? '&#10003;' : '';
+  }
+  apply();
+  wrap.addEventListener('click', () => {
+    clipboardMonitor = !clipboardMonitor;
+    localStorage.setItem('nr_clipMon', clipboardMonitor);
+    apply();
+    dbg('info', `Clipboard monitor: ${clipboardMonitor}`);
+  });
+})();
+
+let _lastSeenClip = '';
+let _ignoredUrls = new Set();
+let _activePromptUrl = null;
+function isLikelyDownloadUrl(text) {
+  if (!text || text.length > 2048) return false;
+  text = text.trim();
+  if (!/^https?:\/\//i.test(text)) return false;
+  // avoid HTML pages: heuristic - prefer URLs with a path that looks like a file or known stream
+  try {
+    const u = new URL(text);
+    const path = u.pathname.toLowerCase();
+    // Direct file or m3u8 -> likely download
+    if (/\.[a-z0-9]{2,5}(\?|$)/i.test(path)) return true;
+    return false;
+  } catch { return false; }
+}
+
+function showClipboardPrompt(url) {
+  if (_activePromptUrl === url) return;
+  // Remove any existing
+  document.querySelectorAll('.clipboard-prompt').forEach(el => el.remove());
+  _activePromptUrl = url;
+
+  const el = document.createElement('div');
+  el.className = 'clipboard-prompt';
+  el.innerHTML = `
+    <div class="clipboard-prompt-text">
+      <div class="clipboard-prompt-title">Download URL detected on clipboard?</div>
+      <div class="clipboard-prompt-url" title="${escapeHtml(url)}">${escapeHtml(url)}</div>
+    </div>
+    <div class="clipboard-prompt-actions">
+      <button class="btn btn-accent btn-sm" data-action="download">Download</button>
+      <button class="btn btn-ghost btn-sm" data-action="ignore">Ignore</button>
+    </div>
+  `;
+  document.body.appendChild(el);
+
+  const close = () => { el.remove(); _activePromptUrl = null; };
+
+  el.querySelector('[data-action="download"]').addEventListener('click', () => {
+    urlInput.value = url;
+    close();
+    addDownload();
+  });
+  el.querySelector('[data-action="ignore"]').addEventListener('click', () => {
+    _ignoredUrls.add(url);
+    close();
+  });
+
+  // Auto-dismiss after 12s
+  setTimeout(() => { if (_activePromptUrl === url) close(); }, 12000);
+}
+
+async function pollClipboard() {
+  if (!clipboardMonitor || !document.hasFocus()) return;
+  try {
+    const text = await clipboardManager.readText();
+    if (!text || text === _lastSeenClip) return;
+    _lastSeenClip = text;
+    if (_ignoredUrls.has(text)) return;
+    if (!isLikelyDownloadUrl(text)) return;
+    // Avoid prompting again if it's already in the active list
+    if (downloads.some(d => d.url === text)) return;
+    showClipboardPrompt(text);
+  } catch (e) {
+    // Permission denied or plugin missing - silently skip
+  }
+}
+setInterval(pollClipboard, 1500);
+
+// ── Per-domain rules UI ──
+function renderRules() {
+  const list = $('#rulesList');
+  if (!list) return;
+  const rules = getRules();
+  list.innerHTML = '';
+  if (rules.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'rules-empty';
+    empty.textContent = 'No rules yet. Add one below to auto-route downloads by extension or domain.';
+    list.appendChild(empty);
+    return;
+  }
+  rules.forEach((r, idx) => {
+    const el = document.createElement('div');
+    el.className = 'rule-item';
+    el.innerHTML = `
+      <span class="rule-pattern">${escapeHtml(r.pattern)}</span>
+      <span class="rule-arrow">&rarr;</span>
+      <span class="rule-folder" title="${escapeHtml(r.folder)}">${escapeHtml(r.folder)}</span>
+      <button class="rule-remove" title="Remove">&times;</button>
+    `;
+    el.querySelector('.rule-remove').addEventListener('click', () => {
+      const all = getRules();
+      all.splice(idx, 1);
+      saveRules(all);
+      renderRules();
+    });
+    list.appendChild(el);
+  });
+}
+(function initRulesUI() {
+  const addBtn = $('#ruleAddBtn');
+  const browseBtn = $('#ruleBrowseBtn');
+  const patternIn = $('#ruleNewPattern');
+  const folderIn = $('#ruleNewFolder');
+  if (!addBtn || !patternIn || !folderIn) return;
+  addBtn.addEventListener('click', () => {
+    const pattern = patternIn.value.trim();
+    const folder = folderIn.value.trim();
+    if (!pattern || !folder) {
+      showToast('warn', 'Missing fields', 'Both a pattern and a folder are required.');
+      return;
+    }
+    const rules = getRules();
+    rules.push({ pattern, folder });
+    saveRules(rules);
+    patternIn.value = '';
+    folderIn.value = '';
+    renderRules();
+    dbg('info', `Rule added: ${pattern} -> ${folder}`);
+  });
+  if (browseBtn) {
+    browseBtn.addEventListener('click', async () => {
+      try {
+        const { open } = window.__TAURI__.dialog;
+        const dir = await open({ directory: true, multiple: false, title: 'Choose target folder for this rule' });
+        if (dir) folderIn.value = dir;
+      } catch (e) { console.error(e); }
+    });
+  }
+  renderRules();
+})();
+
+// ── Scheduler tick: every 30s, start any queued downloads whose scheduled time has arrived ──
+async function tickScheduler() {
+  const now = new Date();
+  for (const d of downloads) {
+    if (d.status !== 'Queued' || !d.scheduled_at) continue;
+    const t = new Date(d.scheduled_at);
+    if (isNaN(t.getTime())) continue;
+    if (t <= now) {
+      const max = getMaxConcurrent();
+      const active = getActiveCount();
+      if (active >= max) break;
+      dbg('info', `Scheduled time reached for ${d.filename || d.id}; starting`);
+      try {
+        await invoke('start_queued_download', { id: d.id });
+        d.status = 'Downloading';
+      } catch (e) {
+        dbg('error', `Scheduler start failed: ${e}`);
+      }
+    }
+  }
+}
+setInterval(tickScheduler, 30000);
 
 // ── History ──
 const historyStatusFilters = { Completed: true, Downloading: true, Paused: true, Failed: true, Cancelled: true, Queued: true };
@@ -552,7 +820,7 @@ function createDownloadElement(d) {
       const active = getActiveCount();
       const autoStart = active < max;
       const newId = await invoke('add_download', {
-        url: retryUrl, saveDir: retryDir, filename: retryFilename, autoStart, cookies: null, method: null, referer: null,
+        url: retryUrl, saveDir: retryDir, filename: retryFilename, autoStart, cookies: null, method: null, referer: null, scheduledAt: null, isHls: isHlsUrl(retryUrl),
       });
       dbg('event', `Retry created new download: ${newId}`);
       downloads = await invoke('get_downloads');
@@ -585,9 +853,10 @@ function updateDownloadElement(el, d) {
   el.querySelector('.dl-filename').textContent = d.filename || 'Resolving...';
   el.querySelector('.dl-url').textContent = d.url;
 
-  // Size
+  // Size + percentage
+  const dlPct = d.total_bytes > 0 ? ((d.downloaded_bytes / d.total_bytes) * 100).toFixed(1) : null;
   const sizeText = d.total_bytes > 0
-    ? `${formatBytes(d.downloaded_bytes)} / ${formatBytes(d.total_bytes)}`
+    ? `${formatBytes(d.downloaded_bytes)} / ${formatBytes(d.total_bytes)} (${dlPct}%)`
     : d.downloaded_bytes > 0 ? formatBytes(d.downloaded_bytes) : '';
   el.querySelector('.dl-size').textContent = sizeText;
 
@@ -625,9 +894,8 @@ function updateDownloadElement(el, d) {
   el.querySelector('.btn-remove').style.display = isDone ? '' : 'none';
 }
 
-// ── Overall progress: remember bytes from completed downloads so % never drops ──
-let _completedBytes = 0;      // accumulated total_bytes of downloads that left the active list
-let _completedDownloaded = 0;  // accumulated downloaded_bytes (should equal _completedBytes)
+// ── Overall progress: average of individual percentages ──
+let _completedCount = 0;       // number of downloads that completed (each counts as 100%)
 const _trackedIds = new Set(); // IDs currently counted in overall progress
 
 // ── Speed Graph ──
@@ -858,30 +1126,29 @@ function updateOverallProgress() {
     d.status === 'Downloading' || d.status === 'Queued' || d.status === 'Paused'
   );
 
-  // Track IDs - when one leaves (completed/cleared), bank its bytes so % never drops
+  // Track IDs - when one leaves, only count it as 100% if it actually completed
   const currentIds = new Set(tracked.map(d => d.id));
   for (const id of _trackedIds) {
     if (!currentIds.has(id)) {
-      // This download left the active list - find its last known state
       const gone = downloads.find(d => d.id === id);
-      if (gone) {
-        _completedBytes += gone.total_bytes || 0;
-        _completedDownloaded += gone.downloaded_bytes || 0;
+      if (gone && gone.status === 'Completed') {
+        _completedCount++;
       }
       _trackedIds.delete(id);
     }
   }
   for (const id of currentIds) _trackedIds.add(id);
 
-  if (tracked.length === 0 && _completedBytes === 0) {
+  const totalCount = tracked.length + _completedCount;
+
+  if (totalCount === 0) {
     wrap.style.display = 'none';
     return;
   }
 
-  // Reset banked bytes once everything is done
+  // Reset once everything is done
   if (tracked.length === 0) {
-    _completedBytes = 0;
-    _completedDownloaded = 0;
+    _completedCount = 0;
     _trackedIds.clear();
     wrap.style.display = 'none';
     return;
@@ -889,11 +1156,13 @@ function updateOverallProgress() {
 
   wrap.style.display = '';
 
-  const activeTotalBytes = tracked.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
-  const activeDownloadedBytes = tracked.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
-  const totalBytes = activeTotalBytes + _completedBytes;
-  const downloadedBytes = activeDownloadedBytes + _completedDownloaded;
-  const percent = totalBytes > 0 ? (downloadedBytes / totalBytes) * 100 : 0;
+  // Each download contributes its individual % (0-100), completed ones contribute 100
+  const activePercentSum = tracked.reduce((sum, d) => {
+    if (d.total_bytes > 0) return sum + (d.downloaded_bytes / d.total_bytes) * 100;
+    return sum; // queued (unknown size) = 0%
+  }, 0);
+  const percent = (activePercentSum + _completedCount * 100) / totalCount;
+
   const downloading = tracked.filter(d => d.status === 'Downloading').length;
   const queued = tracked.filter(d => d.status === 'Queued').length;
   const paused = tracked.filter(d => d.status === 'Paused').length;
@@ -903,10 +1172,11 @@ function updateOverallProgress() {
   if (queued > 0) parts.push(`${queued} ${t('overall.queued')}`);
   if (paused > 0) parts.push(`${paused} ${t('overall.paused')}`);
   const totalSpeed = tracked.filter(d => d.status === 'Downloading').reduce((s, d) => s + (smoothSpeedEta ? (_smoothedSpeeds[d.id] ?? d.speed_bps) : d.speed_bps || 0), 0);
-  const overallRemaining = totalBytes - downloadedBytes;
-  const etaStr = formatEta(overallRemaining, totalSpeed);
-  text.textContent = `${parts.join(', ')} - ${formatBytes(downloadedBytes)} / ${totalBytes > 0 ? formatBytes(totalBytes) : '?'}${etaStr ? ' - ' + etaStr + ' ' + t('overall.remaining') : ''}`;
-  pct.textContent = totalBytes > 0 ? `${percent.toFixed(1)}%` : '';
+  const activeTotalBytes = tracked.reduce((sum, d) => sum + (d.total_bytes || 0), 0);
+  const activeDownloadedBytes = tracked.reduce((sum, d) => sum + (d.downloaded_bytes || 0), 0);
+  const etaStr = formatEta(activeTotalBytes - activeDownloadedBytes, totalSpeed);
+  text.textContent = `${parts.join(', ')} - ${percent.toFixed(1)}%${etaStr ? ' - ' + etaStr + ' ' + t('overall.remaining') : ''}`;
+  pct.textContent = `${percent.toFixed(1)}%`;
 
   bar.style.width = percent + '%';
   bar.classList.toggle('done', percent >= 100);
@@ -1011,6 +1281,16 @@ function showSaveDirDialog(initialDir, initialFilename) {
   });
 }
 
+// ── Speed Limit ──
+const speedLimitInput = $('#speedLimit');
+if (speedLimitInput) {
+  speedLimitInput.addEventListener('change', () => {
+    const kbps = Math.max(0, parseInt(speedLimitInput.value, 10) || 0);
+    invoke('set_speed_limit', { kbps });
+    dbg('info', `Speed limit set to ${kbps === 0 ? 'unlimited' : kbps + ' KB/s'}`);
+  });
+}
+
 // ── Concurrency Control ──
 function getMaxConcurrent() {
   const val = parseInt($('#maxConcurrent')?.value, 10);
@@ -1031,6 +1311,7 @@ async function tryStartQueued() {
     for (const d of queued) {
       const active = getActiveCount(); // re-check each iteration
       if (active >= max) break;
+      d.status = 'Downloading'; // optimistically update so next getActiveCount() sees it
       dbg('info', `Starting queued download: ${d.filename || d.id} (slot ${active + 1}/${max})`);
       await invoke('start_queued_download', { id: d.id });
     }
@@ -1045,9 +1326,24 @@ async function addDownload() {
   if (!url) return;
   dbg('info', `Add download requested: ${url}`);
 
-  // Resolve filename - skip the HEAD request if the browser extension already provided one
+  const hls = isHlsUrl(url);
+  if (hls) {
+    dbg('info', 'Detected HLS/m3u8 stream - will route to ffmpeg');
+    try {
+      const hasFf = await invoke('check_ffmpeg');
+      if (!hasFf) {
+        showToast('error', 'ffmpeg not installed', 'This URL is an HLS/m3u8 stream. Install ffmpeg from https://ffmpeg.org/download.html and add it to PATH, then restart Net Reaper.', 12000);
+        return;
+      }
+    } catch (e) { dbg('warn', `check_ffmpeg failed: ${e}`); }
+  }
+
+  // Resolve filename - skip the HEAD request if browser extension provided one, or HLS (synthesize)
   let resolvedFilename = 'download';
-  if (_pendingBrowserDownload?.filename) {
+  if (hls) {
+    resolvedFilename = deriveHlsFilename(url);
+    dbg('info', `HLS filename derived: ${resolvedFilename}`);
+  } else if (_pendingBrowserDownload?.filename) {
     resolvedFilename = _pendingBrowserDownload.filename;
     dbg('info', `Using filename from browser extension: ${resolvedFilename}`);
   } else {
@@ -1061,9 +1357,23 @@ async function addDownload() {
     }
   }
 
+  // Try matching a per-domain/per-extension rule before deciding whether to prompt
+  const matchedRule = findMatchingRule(url, resolvedFilename);
+  if (matchedRule) {
+    dbg('info', `Rule matched: ${matchedRule.pattern} -> ${matchedRule.folder}`);
+  }
+
   let saveDir, filename;
 
-  if (skipAskDir && lastSaveDir) {
+  if (_pendingBrowserDownload?._reuseDir) {
+    saveDir = _pendingBrowserDownload._reuseDir;
+    filename = resolvedFilename;
+    dbg('info', `Reusing directory from failed 401 download: ${saveDir}, file: ${filename}`);
+  } else if (matchedRule) {
+    saveDir = matchedRule.folder;
+    filename = resolvedFilename;
+    dbg('info', `Using rule directory: ${saveDir}, file: ${filename}`);
+  } else if (skipAskDir && lastSaveDir) {
     saveDir = lastSaveDir;
     filename = resolvedFilename;
     dbg('info', `Using saved directory (don't ask): ${saveDir}, file: ${filename}`);
@@ -1079,23 +1389,33 @@ async function addDownload() {
     filename = result.filename;
   }
 
+  // Compute scheduled_at if user set a future time
+  let scheduledAt = null;
+  if (scheduleInput && scheduleInput.value) {
+    const dt = new Date(scheduleInput.value);
+    if (!isNaN(dt.getTime()) && dt.getTime() > Date.now() + 1000) {
+      scheduledAt = dt.toISOString();
+      dbg('info', `Scheduled for: ${scheduledAt}`);
+    }
+  }
+
   try {
     urlInput.value = '';
+    if (scheduleInput && scheduledAt) { scheduleInput.value = ''; scheduleInput.classList.remove('has-value'); scheduleClearBtn.style.display = 'none'; }
     const max = getMaxConcurrent();
     const active = getActiveCount();
-    const autoStart = active < max;
-    // Only pass filename if user changed it
+    // Don't auto-start if scheduled in the future
+    const autoStart = !scheduledAt && active < max;
     const customFilename = (filename && filename !== resolvedFilename) ? filename : null;
 
     const cookies = _pendingBrowserDownload?.cookies || null;
     const method = _pendingBrowserDownload?.method || null;
     const referer = _pendingBrowserDownload?.referer || null;
-    dbg('info', `Invoking add_download: url=${url}, dir=${saveDir}, file=${filename}, autoStart=${autoStart} (${active}/${max} active)${cookies ? ' (with cookies)' : ''}${method && method !== 'GET' ? ` (method=${method})` : ''}${referer ? ' (has referer)' : ''}`);
-    const id = await invoke('add_download', { url, saveDir, filename: customFilename, autoStart, cookies, method, referer });
+    dbg('info', `Invoking add_download: url=${url}, dir=${saveDir}, file=${filename}, autoStart=${autoStart}${scheduledAt ? ` (scheduled ${scheduledAt})` : ''}${hls ? ' [HLS]' : ''}`);
+    const id = await invoke('add_download', { url, saveDir, filename: customFilename, autoStart, cookies, method, referer, scheduledAt, isHls: hls });
     dbg('event', `Download created with id: ${id}${autoStart ? '' : ' (queued)'}`);
     const allDownloads = await invoke('get_downloads');
     downloads = allDownloads;
-    // Add to history immediately (so queued items show up)
     const newDl = downloads.find(d => d.id === id);
     if (newDl) addOrUpdateHistory(newDl);
     render();
@@ -1170,6 +1490,38 @@ listen('browser-download', async (event) => {
   if (dlNav) dlNav.classList.add('active');
   const dlPanel = document.getElementById('panel-downloads');
   if (dlPanel) dlPanel.classList.add('active');
+
+  // Check if there's a recent 401 failure for the same filename - auto-replace it
+  const incomingFilename = req.filename || req.url.split('/').pop()?.split('?')[0] || '';
+  const failed401 = downloads.find(d =>
+    d.status === 'Failed' &&
+    d.error && d.error.includes('401') &&
+    d.filename === decodeURIComponent(incomingFilename)
+  );
+  if (failed401) {
+    dbg('info', `Auto-replacing failed 401 download: ${failed401.filename} (Cloudflare retry)`);
+    const reuseDir = failed401.save_path.replace(/[\\/][^\\/]+$/, '');
+    try {
+      await invoke('remove_download', { id: failed401.id });
+      downloads = downloads.filter(dl => dl.id !== failed401.id);
+      delete _smoothedSpeeds[failed401.id];
+    } catch (e) {
+      dbg('warn', `Failed to remove old 401 download: ${e}`);
+    }
+    // Proceed with the new download reusing the same save directory
+    _pendingBrowserDownload = {
+      cookies: req.cookies || null,
+      filename: req.filename || null,
+      filesize: req.filesize || null,
+      method: req.method || null,
+      referer: req.referer || null,
+      _reuseDir: reuseDir,
+    };
+    urlInput.value = req.url;
+    await addDownload();
+    _pendingBrowserDownload = null;
+    return;
+  }
 
   // Store browser context so addDownload() can use it
   _pendingBrowserDownload = {
@@ -1263,6 +1615,14 @@ async function init() {
     dbg('error', `Could not get default download dir: ${e}`);
   }
 
+  // Sync saved segments setting to backend
+  try {
+    const savedSegments = parseInt(localStorage.getItem('nr_segments') || '8', 10);
+    const n = Math.max(1, Math.min(16, savedSegments));
+    await invoke('set_segments', { count: n });
+    dbg('info', `Synced segments to backend: ${n}`);
+  } catch (e) { dbg('warn', `set_segments init failed: ${e}`); }
+
   try {
     downloads = await invoke('get_downloads');
     dbg('info', `Loaded ${downloads.length} existing download(s)`);
@@ -1282,8 +1642,7 @@ function showExtensionSetupGuide() {
     '4. Click the Net Reaper icon in the toolbar to verify it says "connected"',
   ].join('\n'), 15000);
 }
-// TODO: replace with real Chrome Web Store URL when extension is published
-const EXT_STORE_URL = 'https://github.com/EerieGoesD/net-reaper#browser-extension';
+const EXT_STORE_URL = 'https://chromewebstore.google.com/detail/net-reaper-internet-downl/kdojofdpfemlpcelbdbgcpkmjhememnb';
 
 document.getElementById('extDownloadBtn')?.addEventListener('click', () => {
   window.__TAURI__.shell.open(EXT_STORE_URL);
@@ -1305,11 +1664,11 @@ document.getElementById('linkCoffee').addEventListener('click', (e) => {
 });
 document.getElementById('linkIssue').addEventListener('click', (e) => {
   e.preventDefault();
-  window.__TAURI__.shell.open('https://github.com/EerieGoesD/net-reaper/issues');
+  window.__TAURI__.shell.open('https://github.com/EerieGoesD/net-reaper/issues/new?template=bug-report.md');
 });
 document.getElementById('linkFeedback').addEventListener('click', (e) => {
   e.preventDefault();
-  window.__TAURI__.shell.open('https://github.com/EerieGoesD/net-reaper/discussions');
+  window.__TAURI__.shell.open('https://github.com/EerieGoesD/net-reaper/discussions/new?category=ideas');
 });
 
 // ── Language ──

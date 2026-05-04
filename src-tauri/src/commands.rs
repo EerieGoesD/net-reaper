@@ -12,8 +12,19 @@ pub async fn add_download(
     cookies: Option<String>,
     method: Option<String>,
     referer: Option<String>,
+    scheduled_at: Option<String>,
+    is_hls: Option<bool>,
 ) -> Result<String, String> {
-    let id = state.add_download(url, save_dir, filename, cookies, method, referer).await?;
+    let id = state.add_download(
+        url,
+        save_dir,
+        filename,
+        cookies,
+        method,
+        referer,
+        scheduled_at,
+        is_hls.unwrap_or(false),
+    ).await?;
 
     if auto_start {
         start_download_task(state.inner().clone(), id.clone(), app);
@@ -132,6 +143,38 @@ pub async fn show_in_folder(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open file manager: {}", e))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn set_speed_limit(state: State<'_, DownloadManager>, kbps: u64) -> Result<(), String> {
+    state.set_speed_limit(kbps);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_segments(state: State<'_, DownloadManager>, count: u64) -> Result<(), String> {
+    state.set_segments(count);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_segments(state: State<'_, DownloadManager>) -> Result<u64, String> {
+    Ok(state.get_segments())
+}
+
+#[tauri::command]
+pub async fn check_ffmpeg() -> Result<bool, String> {
+    let exe_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    if let Ok(path_var) = std::env::var("PATH") {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        for dir in path_var.split(sep) {
+            let candidate = std::path::PathBuf::from(dir).join(exe_name);
+            if candidate.is_file() {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[tauri::command]

@@ -51,6 +51,13 @@
           <input class="url-input" type="url" id="urlInput" placeholder="Paste download URL here…" spellcheck="false" />
           <button class="btn btn-accent" id="addBtn">Download</button>
         </div>
+        <div class="schedule-row">
+          <div class="schedule-wrap">
+            <span class="schedule-label">Schedule (optional, defaults to now):</span>
+            <input class="schedule-input" type="datetime-local" id="scheduleInput" title="Leave empty to download immediately. Set a future date/time to delay the start." />
+            <button class="btn btn-ghost btn-sm" id="scheduleClearBtn" title="Clear scheduled time" style="display:none;">&#10005;</button>
+          </div>
+        </div>
         <div class="controls">
           <button class="btn btn-ghost btn-sm" id="pauseAllBtn">Pause All</button>
           <button class="btn btn-ghost btn-sm" id="resumeAllBtn">Resume All</button>
@@ -145,21 +152,21 @@
             </div>
           </div>
           <div class="setting-group">
-            <label>Download Prompt</label>
+            <label data-i18n="settings.downloadPrompt">Download Prompt</label>
             <div class="setting-row" style="cursor:pointer;" id="askDirToggleWrap">
               <div class="debug-check" id="askDirCheck"></div>
               <span style="font-size:13px;color:var(--text-dim);">Always ask where to save</span>
             </div>
           </div>
           <div class="setting-group">
-            <label>After Download</label>
+            <label data-i18n="settings.afterDownload">After Download</label>
             <div class="setting-row" style="cursor:pointer;" id="autoClearToggleSettings">
               <div class="debug-check" id="autoClearCheckSettings"></div>
               <span style="font-size:13px;color:var(--text-dim);">Auto-clear completed downloads from list</span>
             </div>
           </div>
           <div class="setting-group">
-            <label>Display</label>
+            <label data-i18n="settings.display">Display</label>
             <div class="setting-row" style="cursor:pointer;" id="speedGraphToggleSettings">
               <div class="debug-check" id="speedGraphCheckSettings"></div>
               <span style="font-size:13px;color:var(--text-dim);">Show download speed graph</span>
@@ -176,15 +183,49 @@
             </div>
           </div>
           <div class="setting-group">
-            <label>Max Concurrent Downloads</label>
+            <label data-i18n="settings.maxConcurrent">Max Concurrent Downloads</label>
             <div class="setting-row">
               <input type="number" id="maxConcurrent" value="3" min="1" max="10" />
             </div>
           </div>
           <div class="setting-group">
-            <label>Speed Limit (KB/s, 0 = unlimited)</label>
+            <label>Parallel Segments per Download
+              <span class="setting-tooltip" data-tip="Splits each file into N pieces and downloads them in parallel using HTTP Range requests.
+
+Faster on high-bandwidth connections and against per-connection throttling. Falls back automatically if the server does not support ranges.
+
+1 = disables segmentation
+8 = default">?</span>
+            </label>
+            <div class="setting-row">
+              <input type="number" id="segments" value="8" min="1" max="16" />
+            </div>
+          </div>
+          <div class="setting-group">
+            <label data-i18n="settings.speedLimit">Speed Limit (KB/s, 0 = unlimited)</label>
             <div class="setting-row">
               <input type="number" id="speedLimit" value="0" min="0" />
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>Clipboard Monitor</label>
+            <div class="setting-row" style="cursor:pointer;" id="clipMonToggleWrap">
+              <div class="debug-check" id="clipMonCheck"></div>
+              <span style="font-size:13px;color:var(--text-dim);">Detect URLs copied to clipboard
+                <span class="setting-tooltip" data-tip="When enabled, Net Reaper watches your clipboard while focused and prompts you to download any URL it sees. Each URL prompts only once.">?</span>
+              </span>
+            </div>
+          </div>
+          <div class="setting-group">
+            <label>Per-domain / Per-extension Rules
+              <span class="setting-tooltip" data-tip="Auto-route downloads into folders based on the URL's domain or the file extension. The first matching rule wins. Patterns: domain like example.com, or extension like .mp4 / mp4.">?</span>
+            </label>
+            <div id="rulesList" class="rules-list"></div>
+            <div class="setting-row" style="margin-top:6px;">
+              <input type="text" id="ruleNewPattern" placeholder="Pattern" style="flex:1;font-family:var(--mono);font-size:12px;" />
+              <input type="text" id="ruleNewFolder" placeholder="Folder path" style="flex:2;" />
+              <button class="btn btn-ghost btn-sm" id="ruleBrowseBtn">Browse</button>
+              <button class="btn btn-accent btn-sm" id="ruleAddBtn">Add</button>
             </div>
           </div>
           <div style="height:1px;background:var(--border);margin:8px 0;"></div>
@@ -192,21 +233,22 @@
             <label>Browser Integration</label>
             <div class="ext-cta">
               <div class="ext-cta-text">
-                <strong>Capture downloads from your browser</strong>
+                <strong>Get the Chrome Extension to download directly from your browser</strong>
                 <span>The browser extension intercepts downloads directly from Chrome, Brave, or Edge and routes them through Net Reaper. This bypasses Cloudflare protection and lets you manage, queue, and resume downloads in one place.</span>
               </div>
               <div class="ext-cta-actions">
-                <button class="btn btn-accent btn-sm" id="extDownloadBtn">Install Extension</button>
+                <button class="btn btn-accent btn-sm" id="extDownloadBtn">Get Extension</button>
                 <button class="btn btn-ghost btn-sm" id="extSetupBtn">Setup Guide</button>
               </div>
             </div>
           </div>
           <div style="height:1px;background:var(--border);margin:8px 0;"></div>
           <div class="setting-group">
-            <label>Developer</label>
             <div class="setting-row" style="cursor:pointer;" id="debugToggleWrap">
               <div class="debug-check" id="debugCheck"></div>
-              <span style="font-size:13px;color:var(--text-dim);">Enable Debug Mode</span>
+              <span style="font-size:13px;color:var(--text-dim);">Enable Debug Mode
+                <span class="setting-tooltip" data-tip="Adds a Debug panel to the sidebar that streams real-time logs of every download attempt, error, and event. Useful for troubleshooting failed downloads. Leave off for normal use.">?</span>
+              </span>
             </div>
           </div>
         </div>
@@ -245,17 +287,17 @@
       <span id="footerActive">0 active</span>
       <span id="footerCompleted">0 completed</span>
       <span id="footerSpeed"></span>
-      <a class="footer-ext-cta" id="footerExtLink" href="#" title="Capture downloads directly from your browser - bypasses Cloudflare and other protections">&#9889; Capture browser downloads</a>
+      <a class="footer-ext-cta" id="footerExtLink" href="#" title="Get the Chrome Extension to download directly from your browser. Bypasses Cloudflare and other protections.">&#9889; Get Chrome Extension</a>
     </div>
     <div class="footer-links">
       <span>Made by</span>
       <a id="linkEerie" href="#">EERIE</a>
       <span class="sep">|</span>
-      <a id="linkCoffee" href="#">Buy Me a Coffee</a>
+      <a id="linkCoffee" href="#">Support This Project</a>
       <span class="sep">|</span>
       <a id="linkIssue" href="#">Report Issue</a>
       <span class="sep">|</span>
-      <a id="linkFeedback" href="#">Feedback</a>
+      <a id="linkFeedback" href="#">Suggest Feature</a>
     </div>
   </div>
 </div>

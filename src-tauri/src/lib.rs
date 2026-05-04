@@ -13,6 +13,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(DownloadManager::new())
         .invoke_handler(tauri::generate_handler![
             commands::add_download,
@@ -26,6 +27,10 @@ pub fn run() {
             commands::resolve_filename,
             commands::get_default_download_dir,
             commands::show_in_folder,
+            commands::set_speed_limit,
+            commands::set_segments,
+            commands::get_segments,
+            commands::check_ffmpeg,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

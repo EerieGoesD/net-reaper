@@ -4,6 +4,7 @@
   "path": "C:\\Users\\eerie\\Documents\\GitHub\\net-reaper\\browser-extension\\host\\net_reaper_host.bat",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://cefbbgepiagenbdbbolghckaogmffpac/"
+    "chrome-extension://cefbbgepiagenbdbbolghckaogmffpac/",
+    "chrome-extension://kdojofdpfemlpcelbdbgcpkmjhememnb/"
   ]
 }

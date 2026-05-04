@@ -94,7 +94,31 @@ select:focus { border-color: var(--accent); }
 .status-text { font-size: 12px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; }
 
 /* ── Add Download Bar ── */
-.add-bar { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.add-bar { display: flex; align-items: center; gap: 10px; padding: 14px 20px 8px; flex-shrink: 0; }
+.schedule-row { display: flex; align-items: center; padding: 0 20px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.schedule-wrap { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.schedule-label { font-size: 10px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; letter-spacing: 0.02em; }
+.schedule-input { padding: 7px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-dim); font-family: var(--mono); font-size: 11px; outline: none; transition: all 0.15s; flex-shrink: 0; color-scheme: dark; }
+.schedule-input:focus { border-color: var(--accent); color: var(--text); }
+.schedule-input.has-value { color: var(--accent-h); border-color: var(--accent); }
+
+/* ── Per-domain rules list ── */
+.rules-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.rule-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.rule-pattern { font-family: var(--mono); font-size: 11px; color: var(--accent-h); min-width: 120px; }
+.rule-arrow { color: var(--text-dim); font-size: 11px; }
+.rule-folder { font-family: var(--mono); font-size: 11px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-remove { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
+.rule-remove:hover { background: var(--surface2); color: var(--danger); }
+.rules-empty { font-size: 11px; color: var(--text-dim); font-style: italic; padding: 4px 0; }
+
+/* ── Clipboard prompt ── */
+.clipboard-prompt { position: fixed; bottom: 60px; right: 20px; background: var(--surface); border: 1px solid var(--accent); border-radius: 10px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); display: flex; align-items: center; gap: 12px; max-width: 480px; z-index: 50; animation: slideInRight 0.2s ease; }
+.clipboard-prompt-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.clipboard-prompt-title { font-size: 12px; font-weight: 600; color: var(--accent-h); }
+.clipboard-prompt-url { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+.clipboard-prompt-actions { display: flex; gap: 6px; flex-shrink: 0; }
+@keyframes slideInRight { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
 /* ── Speed Graph ── */
 .speed-graph-wrap { display: flex; flex-direction: column; flex-shrink: 0; border-bottom: 1px solid var(--border); }
@@ -294,7 +318,7 @@ select:focus { border-color: var(--accent); }
 
 /* ── Setting Tooltip ── */
 .setting-tooltip { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim); font-size: 10px; font-weight: 600; cursor: help; margin-left: 5px; position: relative; vertical-align: middle; flex-shrink: 0; }
-.setting-tooltip::after { content: attr(data-tip); position: absolute; left: 20px; top: 50%; transform: translateY(-50%); background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-size: 11px; padding: 7px 10px; border-radius: 6px; width: 240px; white-space: normal; line-height: 1.5; z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+.setting-tooltip::after { content: attr(data-tip); position: absolute; left: 20px; top: 50%; transform: translateY(-50%); background: var(--surface2); border: 1px solid var(--border); color: var(--text); font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; padding: 7px 10px; border-radius: 6px; width: 240px; white-space: pre-line; line-height: 1.5; z-index: 100; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
 .setting-tooltip:hover::after { opacity: 1; }
 
 /* ── Extension CTA ── */

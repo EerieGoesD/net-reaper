@@ -5,10 +5,9 @@ use std::path::PathBuf;
 
 const HOST_NAME: &str = "com.eerie.net_reaper";
 
-// TODO: update this with the real Chrome Web Store extension ID after publishing
 const ALLOWED_ORIGINS: &[&str] = &[
     "chrome-extension://cefbbgepiagenbdbbolghckaogmffpac/", // dev/unpacked ID
-    // "chrome-extension://REAL_STORE_ID_HERE/",            // Chrome Web Store ID (add after publishing)
+    "chrome-extension://kdojofdpfemlpcelbdbgcpkmjhememnb/", // Chrome Web Store ID
 ];
 
 /// Get the path to the native host binary (sitting next to the main app exe)

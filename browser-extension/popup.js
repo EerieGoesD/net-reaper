@@ -5,6 +5,17 @@ const clearBtn = document.getElementById('clearLog');
 const copyBtn = document.getElementById('copyLog');
 const exportBtn = document.getElementById('exportLog');
 
+// TODO: replace with the real Microsoft Store URL once available
+const MS_STORE_URL = '';
+const getAppLink = document.getElementById('getAppLink');
+if (getAppLink) {
+  if (MS_STORE_URL) {
+    getAppLink.href = MS_STORE_URL;
+  } else {
+    getAppLink.addEventListener('click', (e) => e.preventDefault());
+  }
+}
+
 // Load state
 chrome.storage.local.get('enabled', (data) => {
   const on = data.enabled !== false;

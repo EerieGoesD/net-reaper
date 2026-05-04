@@ -19,4 +19,4 @@ Requires [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/).
 
 ## Links
 
-Made by [EERIE](https://eeriegoesd.com) · [Buy Me a Coffee](https://buymeacoffee.com/eeriegoesd) · [Report Issue](https://github.com/EerieGoesD/net-reaper/issues) · [Feedback](https://github.com/EerieGoesD/net-reaper/discussions)
+Made by [EERIE](https://eeriegoesd.com) · [Support This Project](https://buymeacoffee.com/eeriegoesd) · [Report Issue](https://github.com/EerieGoesD/net-reaper/issues) · [Feedback](https://github.com/EerieGoesD/net-reaper/discussions)

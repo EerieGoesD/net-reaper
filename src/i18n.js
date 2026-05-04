@@ -70,9 +70,9 @@ const TRANSLATIONS = {
 
     // Footer
     'footer.madeBy': 'Made by',
-    'footer.coffee': 'Buy Me a Coffee',
+    'footer.coffee': 'Support This Project',
     'footer.issue': 'Report Issue',
-    'footer.feedback': 'Feedback',
+    'footer.feedback': 'Suggest Feature',
     'footer.active': 'active',
     'footer.completed': 'completed',
 
@@ -163,9 +163,9 @@ const TRANSLATIONS = {
 
     // Footer
     'footer.madeBy': 'Feito por',
-    'footer.coffee': 'Ofereça-me um Café',
+    'footer.coffee': 'Apoiar este Projeto',
     'footer.issue': 'Reportar Problema',
-    'footer.feedback': 'Feedback',
+    'footer.feedback': 'Sugerir Funcionalidade',
     'footer.active': 'ativas',
     'footer.completed': 'concluídas',
 
@@ -254,12 +254,8 @@ function applyTranslations() {
   const debugSpan = document.querySelector('#debugToggleWrap span');
   if (debugSpan) debugSpan.textContent = t('settings.debugMode');
 
-  // Settings labels without data-i18n
-  const labels = document.querySelectorAll('#panel-settings .setting-group label');
-  const labelKeys = ['settings.language', 'settings.saveLocation', 'settings.downloadPrompt', 'settings.afterDownload', 'settings.display', 'settings.maxConcurrent', 'settings.speedLimit', 'settings.developer'];
-  labels.forEach((label, i) => {
-    if (labelKeys[i]) label.textContent = t(labelKeys[i]);
-  });
+  // Settings labels are handled via data-i18n attributes above.
+  // Do NOT positionally map labels here - inserting new setting-groups would shift the indices.
 
   // Debug
   const debugSearch = document.getElementById('debugSearch');
