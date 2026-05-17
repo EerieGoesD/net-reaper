@@ -1,5 +1,6 @@
 use futures_util::StreamExt;
-use reqwest::Client;
+use wreq::Client;
+use wreq_util::Emulation;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::{AtomicU64, AtomicBool, Ordering}};
@@ -21,6 +22,7 @@ pub fn human_bytes(bytes: u64) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DownloadStatus {
     Queued,
+    Starting,
     Downloading,
     Paused,
     Completed,
@@ -71,7 +73,7 @@ impl Download {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DownloadManager {
     pub downloads: Arc<Mutex<Vec<Download>>>,
     client: Client,
@@ -80,6 +82,7 @@ pub struct DownloadManager {
     request_cookies: Arc<Mutex<std::collections::HashMap<String, String>>>,
     request_methods: Arc<Mutex<std::collections::HashMap<String, String>>>,
     request_referers: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    request_user_agents: Arc<Mutex<std::collections::HashMap<String, String>>>,
     /// Global speed limit in KB/s (0 = unlimited). Shared across all downloads.
     speed_limit_kbps: Arc<AtomicU64>,
     /// Number of parallel segments per download (1 = no segmentation). Default 8.
@@ -90,27 +93,14 @@ impl DownloadManager {
     pub fn new() -> Self {
         Self {
             downloads: Arc::new(Mutex::new(Vec::new())),
+            // wreq with Chrome 137 emulation: BoringSSL-driven TLS ClientHello,
+            // HTTP/2 SETTINGS / pseudo-header order, and default headers all
+            // matching a real Chrome browser. This is what gets us past
+            // Cloudflare's deeper bot detection (JA3 + HTTP/2 fingerprint).
+            // Per-request Cookie / Referer / User-Agent overrides from the
+            // extension still happen in the request builders below.
             client: Client::builder()
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
-                .default_headers({
-                    let mut h = reqwest::header::HeaderMap::new();
-                    h.insert(reqwest::header::ACCEPT_ENCODING, "identity".parse().unwrap());
-                    h.insert(reqwest::header::ACCEPT, "*/*".parse().unwrap());
-                    h.insert(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9".parse().unwrap());
-                    h.insert("Sec-Ch-Ua", "\"Chromium\";v=\"146\", \"Google Chrome\";v=\"146\", \"Not?A_Brand\";v=\"99\"".parse().unwrap());
-                    h.insert("Sec-Ch-Ua-Mobile", "?0".parse().unwrap());
-                    h.insert("Sec-Ch-Ua-Platform", "\"Windows\"".parse().unwrap());
-                    h.insert("Sec-Fetch-Dest", "document".parse().unwrap());
-                    h.insert("Sec-Fetch-Mode", "navigate".parse().unwrap());
-                    h.insert("Sec-Fetch-Site", "none".parse().unwrap());
-                    h.insert("Sec-Fetch-User", "?1".parse().unwrap());
-                    h.insert("Upgrade-Insecure-Requests", "1".parse().unwrap());
-                    h
-                })
-                .no_gzip()
-                .no_brotli()
-                .no_deflate()
-                .no_proxy()
+                .emulation(Emulation::Chrome137)
                 .tcp_keepalive(std::time::Duration::from_secs(30))
                 .read_timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(30))
@@ -121,6 +111,7 @@ impl DownloadManager {
             request_cookies: Arc::new(Mutex::new(std::collections::HashMap::new())),
             request_methods: Arc::new(Mutex::new(std::collections::HashMap::new())),
             request_referers: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            request_user_agents: Arc::new(Mutex::new(std::collections::HashMap::new())),
             speed_limit_kbps: Arc::new(AtomicU64::new(0)),
             segments: Arc::new(AtomicU64::new(8)),
         }
@@ -154,14 +145,14 @@ impl DownloadManager {
 
         let content_length = resp
             .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
+            .get(wreq::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
 
         let filename = resp
             .headers()
-            .get(reqwest::header::CONTENT_DISPOSITION)
+            .get(wreq::header::CONTENT_DISPOSITION)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| {
                 v.split("filename=")
@@ -192,13 +183,22 @@ impl DownloadManager {
         cookies: Option<String>,
         method: Option<String>,
         referer: Option<String>,
+        user_agent: Option<String>,
         scheduled_at: Option<String>,
         is_hls: bool,
     ) -> Result<String, String> {
-        let (resolved_name, total_bytes) = self.resolve_filename(&url).await.unwrap_or_else(|_| ("download".to_string(), 0));
-        let filename = custom_filename
-            .filter(|n| !n.trim().is_empty())
-            .unwrap_or(resolved_name);
+        // Only do an unauthenticated HEAD if the caller did not give us a
+        // filename. Probing always burns a network round-trip and on
+        // Cloudflare-protected URLs can trip bot detection or burn a
+        // one-use token before the authenticated GET runs.
+        let custom = custom_filename.filter(|n| !n.trim().is_empty());
+        let (filename, total_bytes) = match custom {
+            Some(n) => (n, 0u64),
+            None => self
+                .resolve_filename(&url)
+                .await
+                .unwrap_or_else(|_| ("download".to_string(), 0)),
+        };
         let save_path = PathBuf::from(&save_dir)
             .join(&filename)
             .to_string_lossy()
@@ -236,6 +236,12 @@ impl DownloadManager {
             let mut rmap = self.request_referers.lock().await;
             rmap.insert(id.clone(), r);
         }
+        if let Some(ua) = user_agent {
+            if !ua.trim().is_empty() {
+                let mut uamap = self.request_user_agents.lock().await;
+                uamap.insert(id.clone(), ua);
+            }
+        }
 
         Ok(id)
     }
@@ -252,21 +258,40 @@ impl DownloadManager {
             let rmap = self.request_referers.lock().await;
             if let Some(r) = rmap.get(id) { req = req.header("Referer", r.as_str()); }
         }
+        {
+            let uamap = self.request_user_agents.lock().await;
+            if let Some(ua) = uamap.get(id) { req = req.header("User-Agent", ua.as_str()); }
+        }
         match req.send().await {
             Ok(resp) => {
+                let status = resp.status();
+                let server = resp.headers().get("server")
+                    .and_then(|v| v.to_str().ok()).unwrap_or("-").to_string();
+                let cf_ray = resp.headers().get("cf-ray")
+                    .and_then(|v| v.to_str().ok()).unwrap_or("-").to_string();
                 let supports = resp.headers()
-                    .get(reqwest::header::ACCEPT_RANGES)
+                    .get(wreq::header::ACCEPT_RANGES)
                     .and_then(|v| v.to_str().ok())
                     .map(|v| v.to_lowercase().contains("bytes"))
                     .unwrap_or(false);
                 let total = resp.headers()
-                    .get(reqwest::header::CONTENT_LENGTH)
+                    .get(wreq::header::CONTENT_LENGTH)
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok())
                     .unwrap_or(0);
+                if !status.is_success() {
+                    let url_short: String = url.chars().take(120).collect();
+                    eprintln!(
+                        "[probe_ranges] HEAD {} {} - server={}, cf-ray={}, supports_ranges={}, len={}",
+                        status.as_u16(), url_short, server, cf_ray, supports, total,
+                    );
+                }
                 (supports, total)
             }
-            Err(_) => (false, 0),
+            Err(e) => {
+                eprintln!("[probe_ranges] HEAD network error: {}", e);
+                (false, 0)
+            }
         }
     }
 
@@ -280,6 +305,17 @@ impl DownloadManager {
             let d = downloads.iter().find(|d| d.id == id).ok_or("Download not found")?;
             (d.url.clone(), d.total_bytes, d.is_hls)
         };
+
+        // Flip to Starting and push one progress event so the UI shows
+        // "Starting, Please Wait..." while the HEAD probe / initial connect
+        // runs. The downstream paths flip to Downloading once bytes flow.
+        self.update_status(&id, DownloadStatus::Starting).await;
+        {
+            let downloads = self.downloads.lock().await;
+            if let Some(d) = downloads.iter().find(|d| d.id == id) {
+                on_progress(d);
+            }
+        }
 
         if is_hls {
             return self.start_hls_download(id, on_progress).await;
@@ -326,12 +362,38 @@ impl DownloadManager {
             mmap.get(&id).cloned().unwrap_or_else(|| "GET".to_string())
         };
 
+        // Resume support: if we have a partial file on disk smaller than the
+        // expected total, attempt Range: bytes=N-. Server returns 206 if it
+        // honors the range, 200 if it ignores it (then we restart fresh).
+        let resume_from: u64 = match fs::metadata(&download.save_path).await {
+            Ok(meta) => {
+                let on_disk = meta.len();
+                if download.total_bytes > 0
+                    && on_disk > 0
+                    && on_disk < download.total_bytes
+                {
+                    on_disk
+                } else {
+                    0
+                }
+            }
+            Err(_) => 0,
+        };
+
         let mut req = match http_method.as_str() {
             "POST" => self.client.post(&download.url),
             "PUT" => self.client.put(&download.url),
             _ => self.client.get(&download.url),
         };
 
+        if resume_from > 0 {
+            req = req.header("Range", format!("bytes={}-", resume_from));
+            eprintln!(
+                "[resume] {} attempting Range: bytes={}-/{} on {}",
+                http_method, resume_from, download.total_bytes,
+                download.url.chars().take(120).collect::<String>(),
+            );
+        }
         {
             let cmap = self.request_cookies.lock().await;
             if let Some(cookies) = cmap.get(&id) {
@@ -342,6 +404,12 @@ impl DownloadManager {
             let rmap = self.request_referers.lock().await;
             if let Some(referer) = rmap.get(&id) {
                 req = req.header("Referer", referer.as_str());
+            }
+        }
+        {
+            let uamap = self.request_user_agents.lock().await;
+            if let Some(ua) = uamap.get(&id) {
+                req = req.header("User-Agent", ua.as_str());
             }
         }
 
@@ -371,14 +439,56 @@ impl DownloadManager {
                 || body_snippet.contains("hcaptcha")
                 || body_snippet.contains("recaptcha");
 
+            // Diagnostic: did the extension actually forward cookies/UA/referer for this id?
+            let fwd_cookies = self.request_cookies.lock().await.get(&id).cloned();
+            let fwd_ua = self.request_user_agents.lock().await.get(&id).cloned();
+            let fwd_referer = self.request_referers.lock().await.get(&id).cloned();
+            let cookie_count = fwd_cookies.as_ref()
+                .map(|c| c.split(';').filter(|s| !s.trim().is_empty()).count())
+                .unwrap_or(0);
+            let has_cf_clearance = fwd_cookies.as_ref()
+                .map(|c| c.contains("cf_clearance"))
+                .unwrap_or(false);
+            let has_browser_ua = fwd_ua.is_some();
+            let has_referer = fwd_referer.is_some();
+            let ext_forwarded = fwd_cookies.is_some() && has_browser_ua;
+
+            // Mirror to stderr so the npm-run-dev terminal shows the full diagnostic.
+            let url_short: String = download.url.chars().take(120).collect();
+            eprintln!(
+                "[download] {} {} {} - server={}, cf-ray={:?}, ct={}, cookies={} (cf_clearance={}), ua={}, referer={}, body_snippet={:?}",
+                http_method, code, url_short,
+                server, cf_ray, content_type,
+                cookie_count, has_cf_clearance,
+                if has_browser_ua { "browser" } else { "fallback" },
+                has_referer,
+                body_snippet.chars().take(200).collect::<String>(),
+            );
+
             let mut detail = match code {
                 401 => "Unauthorized - server requires authentication or cookies. Try clicking the download button again, or disable Brave Shields if using Brave browser".to_string(),
+                403 if is_cloudflare && has_js_challenge && ext_forwarded =>
+                    format!(
+                        "Cloudflare bot challenge despite TLS impersonation (Chrome 137 emulation), \
+                         forwarded cookies ({}, cf_clearance: {}), browser UA, and Referer. The site is \
+                         using a stricter signal than JA3+cookies (likely turnstile, managed challenge, \
+                         or an out-of-date emulation profile). Refresh the page in your browser to rotate \
+                         cf_clearance and retry. If it still fails, the Chrome emulation profile may need \
+                         updating in wreq-util.",
+                        cookie_count,
+                        if has_cf_clearance { "yes" } else { "NO - extension did not capture it" },
+                    ),
                 403 if is_cloudflare && has_js_challenge =>
-                    "Cloudflare JS challenge - this site requires browser verification. Use the browser extension to capture this download.".to_string(),
+                    "Cloudflare JS challenge - extension did not forward cookies/UA. Make sure Net Reaper Enable Downloads is on, then retry.".to_string(),
                 403 if is_cloudflare && has_captcha =>
-                    "Cloudflare CAPTCHA - this site requires human verification. Open the URL in your browser, complete the challenge, then use the browser extension.".to_string(),
+                    "Cloudflare CAPTCHA - this site requires human verification. Open the URL in your browser, complete the challenge, then retry.".to_string(),
+                403 if is_cloudflare && ext_forwarded =>
+                    format!(
+                        "Cloudflare 403 despite forwarded cookies ({}, cf_clearance={}) and browser UA. Likely TLS fingerprint mismatch or token expired. Refresh in browser and retry.",
+                        cookie_count, has_cf_clearance,
+                    ),
                 403 if is_cloudflare =>
-                    "Cloudflare blocked - the server's firewall rejected this request. Try opening the URL in your browser first, then use the browser extension.".to_string(),
+                    "Cloudflare blocked - extension did not forward cookies/UA, so the server's firewall rejected this request.".to_string(),
                 403 => "Forbidden - access denied by server".to_string(),
                 404 => "Not Found - file does not exist at this URL".to_string(),
                 410 => "Gone - file has been removed".to_string(),
@@ -391,22 +501,45 @@ impl DownloadManager {
             if let Some(ray) = cf_ray { diag.push(format!("cf-ray: {}", ray)); }
             if let Some(cache) = cf_cache { diag.push(format!("cf-cache: {}", cache)); }
             if content_type != "unknown" { diag.push(format!("content-type: {}", content_type)); }
+            diag.push(format!("fwd: cookies={}/{}, ua={}, ref={}",
+                cookie_count,
+                if has_cf_clearance { "cfok" } else { "nocf" },
+                if has_browser_ua { "yes" } else { "no" },
+                if has_referer { "yes" } else { "no" },
+            ));
             detail.push_str(&format!(" [{}]", diag.join(", ")));
 
             return Err(format!("HTTP {} - {}", code, detail));
         }
 
-        let total = resp
+        // If we asked for a Range and got 206, the server honored resume.
+        // If we asked for a Range and got 200, the server ignored it; we
+        // must restart from byte 0 (truncate the partial).
+        let actually_resumed = resume_from > 0 && status.as_u16() == 206;
+        let effective_resume: u64 = if actually_resumed { resume_from } else { 0 };
+
+        let response_len = resp
             .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
+            .get(wreq::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(download.total_bytes);
+            .unwrap_or(0);
+        // For 206, Content-Length is the REMAINING bytes; full file is
+        // effective_resume + response_len. For 200, Content-Length is the
+        // full file.
+        let total = if actually_resumed {
+            effective_resume + response_len
+        } else if response_len > 0 {
+            response_len
+        } else {
+            download.total_bytes
+        };
 
         if total > 0 {
             let mut downloads = self.downloads.lock().await;
             if let Some(d) = downloads.iter_mut().find(|d| d.id == id) {
                 d.total_bytes = total;
+                d.downloaded_bytes = effective_resume;
             }
         }
 
@@ -416,16 +549,39 @@ impl DownloadManager {
                 .map_err(|e| format!("Failed to create directory: {}", e))?;
         }
 
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&download.save_path)
-            .await
-            .map_err(|e| format!("Failed to create file: {}", e))?;
+        let mut file = if actually_resumed {
+            let mut f = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&download.save_path)
+                .await
+                .map_err(|e| format!("Failed to open file for resume: {}", e))?;
+            f.seek(std::io::SeekFrom::Start(effective_resume))
+                .await
+                .map_err(|e| format!("Failed to seek to resume offset {}: {}", effective_resume, e))?;
+            eprintln!(
+                "[resume] honored - continuing from {} of {} (saved {} bytes of re-download)",
+                effective_resume, total, effective_resume,
+            );
+            f
+        } else {
+            if resume_from > 0 {
+                eprintln!(
+                    "[resume] server returned {} instead of 206 - restarting from 0 (partial discarded)",
+                    status.as_u16(),
+                );
+            }
+            fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&download.save_path)
+                .await
+                .map_err(|e| format!("Failed to create file: {}", e))?
+        };
 
         let mut stream = resp.bytes_stream();
-        let mut downloaded: u64 = 0;
+        let mut downloaded: u64 = effective_resume;
         let mut last_tick = std::time::Instant::now();
         let mut bytes_since_tick: u64 = 0;
         let cancel_flags = self.cancel_flags.clone();
@@ -622,6 +778,10 @@ impl DownloadManager {
             let rmap = self.request_referers.lock().await;
             rmap.get(&id).cloned()
         };
+        let user_agent_opt = {
+            let uamap = self.request_user_agents.lock().await;
+            uamap.get(&id).cloned()
+        };
 
         let mut handles = Vec::with_capacity(segments as usize);
         for i in 0..segments {
@@ -638,12 +798,14 @@ impl DownloadManager {
             let client = self.client.clone();
             let cookies_c = cookies_opt.clone();
             let referer_c = referer_opt.clone();
+            let user_agent_c = user_agent_opt.clone();
 
             let handle = tokio::spawn(async move {
                 let mut req = client.get(&url_c)
                     .header("Range", format!("bytes={}-{}", start_byte, end_byte));
                 if let Some(c) = &cookies_c { req = req.header("Cookie", c.as_str()); }
                 if let Some(r) = &referer_c { req = req.header("Referer", r.as_str()); }
+                if let Some(ua) = &user_agent_c { req = req.header("User-Agent", ua.as_str()); }
 
                 let resp = req.send().await
                     .map_err(|e| format!("segment {} request failed: {}", i, e))?;
@@ -876,12 +1038,19 @@ impl DownloadManager {
             let cmap = self.request_cookies.lock().await;
             cmap.get(&id).cloned()
         };
+        let user_agent_opt = {
+            let uamap = self.request_user_agents.lock().await;
+            uamap.get(&id).cloned()
+        };
 
         let mut cmd = tokio::process::Command::new(&ffmpeg);
         cmd.arg("-y");
         cmd.arg("-hide_banner");
         cmd.arg("-loglevel").arg("info");
         cmd.arg("-stats");
+        if let Some(ua) = &user_agent_opt {
+            cmd.arg("-user_agent").arg(ua);
+        }
         if let Some(r) = &referer_opt {
             cmd.arg("-headers").arg(format!("Referer: {}\r\n", r));
         }

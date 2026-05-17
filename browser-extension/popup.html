@@ -108,6 +108,23 @@
   .footer a.link-feedback:hover { color: #22c55e; }
   .footer .sep { color: #222228; }
 
+  .alert {
+    display: none;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    background: #2a1414;
+    border: 1px solid #ef4444;
+    border-radius: 6px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #fecaca;
+  }
+  .alert.show { display: block; }
+  .alert-title { font-weight: 700; color: #ef4444; margin-bottom: 4px; }
+  .alert ul { margin: 4px 0 0 16px; padding: 0; }
+  .alert li { margin: 2px 0; }
+  .alert .filename { color: #fff; word-break: break-all; }
+
   .get-app {
     margin-top: 12px;
     padding: 10px 12px;
@@ -144,8 +161,18 @@
     <span>Net Reaper</span>
   </div>
 
+  <div class="alert" id="alert">
+    <div class="alert-title">Download not intercepted</div>
+    <div id="alertFile"></div>
+    <div>Net Reaper isn't running. Either:</div>
+    <ul>
+      <li>Open the Net Reaper app, or</li>
+      <li>Turn off the toggle below to let the browser handle downloads directly.</li>
+    </ul>
+  </div>
+
   <div class="toggle-row">
-    <span class="toggle-label">Intercept downloads</span>
+    <span class="toggle-label">Enable Downloads</span>
     <div class="toggle on" id="toggle"></div>
   </div>
 
@@ -173,7 +200,7 @@
     <span class="sep">|</span>
     <a class="link-coffee" href="https://buymeacoffee.com/eeriegoesd" target="_blank">Support This Project</a>
     <span class="sep">|</span>
-    <a class="link-issue" href="https://github.com/EerieGoesD/net-reaper/issues" target="_blank">Report Issue</a>
+    <a class="link-issue" href="https://github.com/EerieGoesD/net-reaper/issues/new?template=bug-report.md" target="_blank">Report Issue</a>
     <span class="sep">|</span>
     <a class="link-feedback" href="https://github.com/EerieGoesD/net-reaper/discussions" target="_blank">Feedback</a>
   </div>

@@ -12,6 +12,7 @@ pub async fn add_download(
     cookies: Option<String>,
     method: Option<String>,
     referer: Option<String>,
+    user_agent: Option<String>,
     scheduled_at: Option<String>,
     is_hls: Option<bool>,
 ) -> Result<String, String> {
@@ -22,6 +23,7 @@ pub async fn add_download(
         cookies,
         method,
         referer,
+        user_agent,
         scheduled_at,
         is_hls.unwrap_or(false),
     ).await?;

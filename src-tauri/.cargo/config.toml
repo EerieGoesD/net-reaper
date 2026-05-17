@@ -1,0 +1,7 @@
+# boring-sys (BoringSSL bindings, pulled in by wreq) needs libclang to run
+# bindgen at build time. On this machine, Swift's toolchain ships libclang.dll
+# at the path below. If you move Swift or this path stops resolving, either:
+#   1) install LLVM (winget install LLVM.LLVM) and update this path, OR
+#   2) set LIBCLANG_PATH in your Windows User Environment Variables instead.
+[env]
+LIBCLANG_PATH = "C:/Users/eerie/AppData/Local/Programs/Swift/Toolchains/6.2.4+Asserts/usr/bin"

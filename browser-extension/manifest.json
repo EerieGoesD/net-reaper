@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Net Reaper (Internet Download Manager)",
   "description": "Intercept browser downloads and send them to Net Reaper for faster, resumable downloading with Cloudflare bypass.",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "permissions": [
     "downloads",
     "nativeMessaging",

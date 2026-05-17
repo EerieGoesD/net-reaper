@@ -13,6 +13,8 @@ pub struct BrowserDownloadRequest {
     pub method: Option<String>,
     #[serde(default)]
     pub referer: Option<String>,
+    #[serde(default, rename = "userAgent")]
+    pub user_agent: Option<String>,
 }
 
 /// Listen on a Windows named pipe for download requests from the browser extension's native messaging host.
@@ -27,13 +29,41 @@ pub async fn start_pipe_listener(app: AppHandle) {
 
 #[cfg(windows)]
 async fn listen_once(app: &AppHandle) -> Result<(), String> {
+    use std::ffi::c_void;
     use tokio::net::windows::named_pipe::ServerOptions;
+    use windows_sys::Win32::Security::{
+        InitializeSecurityDescriptor, SetSecurityDescriptorDacl, PSECURITY_DESCRIPTOR,
+        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR,
+    };
+
+    // Without a custom security descriptor, an MSIX-packaged app creates the
+    // pipe with an AppContainer-restricted DACL that denies the Native Messaging
+    // Host (launched by Chrome outside the container) when it tries to connect.
+    // A NULL DACL grants access to all local processes, which is what we want
+    // for this local-only IPC channel.
+    let mut sd: SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    let psd: PSECURITY_DESCRIPTOR = &mut sd as *mut _ as *mut c_void;
+    unsafe {
+        if InitializeSecurityDescriptor(psd, 1) == 0 {
+            return Err("InitializeSecurityDescriptor failed".to_string());
+        }
+        if SetSecurityDescriptorDacl(psd, 1, std::ptr::null_mut(), 0) == 0 {
+            return Err("SetSecurityDescriptorDacl failed".to_string());
+        }
+    }
+    let mut sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: psd,
+        bInheritHandle: 0,
+    };
 
     let pipe_name = r"\\.\pipe\net-reaper";
-    let server = ServerOptions::new()
-        .first_pipe_instance(false)
-        .create(pipe_name)
-        .map_err(|e| format!("Failed to create pipe: {}", e))?;
+    let server = unsafe {
+        ServerOptions::new()
+            .first_pipe_instance(false)
+            .create_with_security_attributes_raw(pipe_name, &mut sa as *mut _ as *mut c_void)
+    }
+    .map_err(|e| format!("Failed to create pipe: {}", e))?;
 
     server
         .connect()

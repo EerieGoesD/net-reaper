@@ -29,11 +29,13 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     const headers = details.requestHeaders || [];
     const cookieHeader = headers.find(h => h.name.toLowerCase() === 'cookie');
     const refererHeader = headers.find(h => h.name.toLowerCase() === 'referer');
+    const uaHeader = headers.find(h => h.name.toLowerCase() === 'user-agent');
     const existing = _requestMeta.get(details.url) || {};
     _requestMeta.set(details.url, {
       ...existing,
       cookies: cookieHeader?.value || null,
       referer: refererHeader?.value || null,
+      userAgent: uaHeader?.value || null,
       ts: Date.now(),
     });
   },
@@ -90,6 +92,69 @@ function connectHost() {
   }
 }
 
+// Probe the desktop app via the native host. Resolves true if the app's
+// named pipe is reachable, false otherwise (host missing, app not running,
+// or no reply within the timeout).
+function pingApp(timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    let probe;
+    try {
+      probe = chrome.runtime.connectNative(HOST_NAME);
+    } catch (_) {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    const finish = (running) => {
+      if (settled) return;
+      settled = true;
+      try { probe.disconnect(); } catch (_) {}
+      resolve(running);
+    };
+    probe.onMessage.addListener((msg) => {
+      if (!msg) return finish(false);
+      if (msg.status === 'ok') return finish(true);
+      if (msg.status === 'error' && /not running/i.test(msg.message || '')) return finish(false);
+      // Older host (no ping support) replies "No URL provided" to a bare
+      // ping. Treat that as unknown and fall back to disconnected so the
+      // user gets the alert instead of a silent failure.
+      finish(false);
+    });
+    probe.onDisconnect.addListener(() => finish(false));
+    try {
+      probe.postMessage({ ping: true });
+    } catch (_) {
+      finish(false);
+      return;
+    }
+    setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+// When the app is not running, let the browser keep the download and surface
+// an alert in the popup so the user understands why interception did not run.
+async function handleAppNotRunning(downloadItem) {
+  log('App not running - skipping interception, alerting user');
+  try {
+    await chrome.storage.local.set({
+      lastAlert: {
+        url: downloadItem.url,
+        filename: downloadItem.filename || null,
+        ts: Date.now(),
+      },
+    });
+  } catch (e) {
+    log(`WARN storing alert failed: ${e.message || e}`);
+  }
+  try {
+    if (chrome.action && typeof chrome.action.openPopup === 'function') {
+      await chrome.action.openPopup();
+    }
+  } catch (e) {
+    log(`WARN openPopup failed: ${e.message || e}`);
+  }
+}
+
 // Read all cookies for a URL and return as a "key=val; key2=val2" string
 async function getCookiesForUrl(url) {
   try {
@@ -140,13 +205,26 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     return;
   }
 
-  // Cancel the browser download
+  // Cancel SYNCHRONOUSLY first. Any awaited work before this (pingApp, cookie
+  // lookups, etc.) gives the browser time to commit to showing its Save As
+  // dialog. The v1.0.1 release cancelled at the top of onCreated and the
+  // dialog never appeared; pingApp was added later and reintroduced the
+  // dialog leak. Fire-and-forget the cancel/erase so nothing blocks here.
   try {
-    await chrome.downloads.cancel(downloadItem.id);
-    await chrome.downloads.erase({ id: downloadItem.id });
+    chrome.downloads.cancel(downloadItem.id);
+    chrome.downloads.erase({ id: downloadItem.id });
     log('Browser download cancelled');
   } catch (e) {
     log(`WARN cancel/erase failed: ${e.message || e}`);
+  }
+
+  // Now (after the cancel is already in flight) confirm the app is running.
+  // If not, surface an alert. We do not re-issue the download because that
+  // would trigger another onCreated and loop.
+  const running = await pingApp();
+  if (!running) {
+    await handleAppNotRunning(downloadItem);
+    return;
   }
 
   // Get captured request metadata (method, cookies, referer) from webRequest listeners
@@ -155,7 +233,9 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
   const method = meta?.method || 'GET';
   const referer = meta?.referer || null;
+  const userAgent = meta?.userAgent || null;
   if (method !== 'GET') log(`Detected ${method} request for this download`);
+  if (userAgent) log(`Captured User-Agent: ${userAgent.substring(0, 60)}${userAgent.length > 60 ? '...' : ''}`);
 
   // Prefer cookies captured from the actual request headers (webRequest) -
   // this works even when chrome.cookies API is blocked by Brave Shields.
@@ -184,8 +264,9 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       cookies,
       method,
       referer,
+      userAgent,
     };
-    log(`Sending to host: ${msg.filename || 'unknown'} (method=${method}, ${msg.cookies ? 'with cookies' : 'no cookies'}${msg.referer ? ', has referer' : ''})`);
+    log(`Sending to host: ${msg.filename || 'unknown'} (method=${method}, ${msg.cookies ? 'with cookies' : 'no cookies'}${msg.referer ? ', has referer' : ''}${msg.userAgent ? ', with UA' : ''})`);
     port.postMessage(msg);
   } else {
     log('ERROR: No native host connection - falling back to browser download');

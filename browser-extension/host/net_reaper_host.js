@@ -66,9 +66,23 @@ function forwardToApp(data) {
   });
 }
 
+// Probe the pipe without forwarding anything. Used by the popup to detect
+// whether the desktop app is actually running.
+function pingApp() {
+  const client = net.createConnection(PIPE_NAME, () => {
+    client.end();
+    sendMessage({ status: 'ok' });
+  });
+  client.on('error', () => {
+    sendMessage({ status: 'error', message: 'Net Reaper is not running' });
+  });
+}
+
 // Main loop
 readMessage(function onMessage(msg) {
-  if (msg.url) {
+  if (msg.ping) {
+    pingApp();
+  } else if (msg.url) {
     forwardToApp(msg);
   } else {
     sendMessage({ status: 'error', message: 'No URL provided' });

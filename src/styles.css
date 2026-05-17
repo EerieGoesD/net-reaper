@@ -179,6 +179,7 @@ select:focus { border-color: var(--accent); }
 .dl-status.failed { background: rgba(239,68,68,0.15); color: var(--danger); }
 .dl-status.paused { background: rgba(234,179,8,0.15); color: var(--warning); }
 .dl-status.queued { background: rgba(99,102,113,0.15); color: var(--text-dim); }
+.dl-status.starting { background: rgba(234,179,8,0.20); color: var(--warning); }
 .dl-status.cancelled { background: rgba(239,68,68,0.1); color: #888; }
 
 /* ── Empty State ── */

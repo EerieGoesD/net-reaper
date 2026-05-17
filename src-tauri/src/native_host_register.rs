@@ -10,8 +10,11 @@ const ALLOWED_ORIGINS: &[&str] = &[
     "chrome-extension://kdojofdpfemlpcelbdbgcpkmjhememnb/", // Chrome Web Store ID
 ];
 
-/// Get the path to the native host binary (sitting next to the main app exe)
-fn host_exe_path() -> Option<PathBuf> {
+/// Get the path to the bundled native host binary (sitting next to the main app exe).
+/// On MSIX installs this resolves to `C:\Program Files\WindowsApps\...` which Chrome/Brave
+/// CANNOT successfully launch as a native messaging host, so this path is only used as the
+/// COPY SOURCE; the registered manifest must point at the deployed copy under LOCALAPPDATA.
+fn bundled_host_exe_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     #[cfg(windows)]
@@ -21,23 +24,53 @@ fn host_exe_path() -> Option<PathBuf> {
     Some(host)
 }
 
-/// Get the path where the host manifest JSON should be written
-fn manifest_path() -> Option<PathBuf> {
+/// Directory where we deploy a user-writable copy of the host EXE and the manifest JSON.
+fn deploy_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let appdata = std::env::var("LOCALAPPDATA").ok()?;
-        let dir = PathBuf::from(appdata).join("Net Reaper");
-        Some(dir.join(format!("{}.json", HOST_NAME)))
+        Some(PathBuf::from(appdata).join("Net Reaper"))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").ok()?;
-        #[cfg(target_os = "macos")]
-        let dir = PathBuf::from(&home).join("Library/Application Support/Google/Chrome/NativeMessagingHosts");
-        #[cfg(target_os = "linux")]
-        let dir = PathBuf::from(&home).join(".config/google-chrome/NativeMessagingHosts");
-        Some(dir.join(format!("{}.json", HOST_NAME)))
+        Some(PathBuf::from(&home).join("Library/Application Support/Google/Chrome/NativeMessagingHosts"))
     }
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var("HOME").ok()?;
+        Some(PathBuf::from(&home).join(".config/google-chrome/NativeMessagingHosts"))
+    }
+}
+
+fn manifest_path(dir: &PathBuf) -> PathBuf {
+    dir.join(format!("{}.json", HOST_NAME))
+}
+
+#[cfg(windows)]
+fn deployed_host_path(dir: &PathBuf) -> PathBuf {
+    dir.join("net-reaper-host.exe")
+}
+
+#[cfg(not(windows))]
+fn deployed_host_path(dir: &PathBuf) -> PathBuf {
+    dir.join("net-reaper-host")
+}
+
+/// Copy the bundled host EXE into the user-writable deploy dir. We do this on every
+/// startup so an MSIX upgrade gets picked up automatically. Skipped if the bundled
+/// path and the deployed path are the same file (non-MSIX dev runs).
+fn deploy_host(bundled: &PathBuf, deployed: &PathBuf) -> Result<(), String> {
+    if let Some(parent) = deployed.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create deploy dir: {}", e))?;
+    }
+    if bundled == deployed {
+        return Ok(());
+    }
+    std::fs::copy(bundled, deployed)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to copy host exe: {}", e))
 }
 
 /// Write the native messaging host manifest JSON
@@ -106,28 +139,35 @@ fn register_in_registry(_manifest_path: &PathBuf) -> Result<(), String> {
 
 /// Run the full registration process. Call this on app startup.
 pub fn register() {
-    let host_exe = match host_exe_path() {
+    let bundled = match bundled_host_exe_path() {
         Some(p) => p,
         None => {
-            eprintln!("[native-host] Could not determine host exe path");
+            eprintln!("[native-host] Could not determine bundled host exe path");
             return;
         }
     };
 
-    if !host_exe.exists() {
-        eprintln!("[native-host] Host binary not found at: {}", host_exe.display());
+    if !bundled.exists() {
+        eprintln!("[native-host] Bundled host binary not found at: {}", bundled.display());
         return;
     }
 
-    let manifest = match manifest_path() {
+    let dir = match deploy_dir() {
         Some(p) => p,
         None => {
-            eprintln!("[native-host] Could not determine manifest path");
+            eprintln!("[native-host] Could not determine deploy dir");
             return;
         }
     };
 
-    if let Err(e) = write_manifest(&manifest, &host_exe) {
+    let deployed = deployed_host_path(&dir);
+    if let Err(e) = deploy_host(&bundled, &deployed) {
+        eprintln!("[native-host] {}", e);
+        return;
+    }
+
+    let manifest = manifest_path(&dir);
+    if let Err(e) = write_manifest(&manifest, &deployed) {
         eprintln!("[native-host] {}", e);
         return;
     }
@@ -137,5 +177,5 @@ pub fn register() {
         return;
     }
 
-    println!("[native-host] Registered: {}", manifest.display());
+    println!("[native-host] Registered: {} -> {}", manifest.display(), deployed.display());
 }

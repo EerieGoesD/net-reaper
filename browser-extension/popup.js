@@ -4,16 +4,25 @@ const logEl = document.getElementById('log');
 const clearBtn = document.getElementById('clearLog');
 const copyBtn = document.getElementById('copyLog');
 const exportBtn = document.getElementById('exportLog');
+const alertEl = document.getElementById('alert');
+const alertFileEl = document.getElementById('alertFile');
 
-// TODO: replace with the real Microsoft Store URL once available
-const MS_STORE_URL = '';
+// Show the "download not intercepted" alert if background opened the popup
+// in response to a failed interception within the last 10 seconds.
+chrome.storage.local.get('lastAlert', ({ lastAlert }) => {
+  if (!lastAlert || !lastAlert.ts || Date.now() - lastAlert.ts > 10000) return;
+  if (alertFileEl) {
+    const name = lastAlert.filename || lastAlert.url || '';
+    alertFileEl.innerHTML = name ? `<span class="filename">${name.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</span>` : '';
+  }
+  if (alertEl) alertEl.classList.add('show');
+  chrome.storage.local.remove('lastAlert');
+});
+
+const MS_STORE_URL = 'https://apps.microsoft.com/detail/9MVK9K79NBZP?hl=en-us&gl=PT&ocid=pdpshare';
 const getAppLink = document.getElementById('getAppLink');
 if (getAppLink) {
-  if (MS_STORE_URL) {
-    getAppLink.href = MS_STORE_URL;
-  } else {
-    getAppLink.addEventListener('click', (e) => e.preventDefault());
-  }
+  getAppLink.href = MS_STORE_URL;
 }
 
 // Load state
@@ -29,26 +38,63 @@ toggle.addEventListener('click', () => {
   chrome.storage.local.set({ enabled: on });
 });
 
-// Check connection by attempting to connect to the native host
-try {
-  const port = chrome.runtime.connectNative('com.eerie.net_reaper');
-  port.onDisconnect.addListener(() => {
-    if (chrome.runtime.lastError) {
-      status.textContent = 'Net Reaper is not running';
-      status.className = 'status disconnected';
-    }
-  });
-  setTimeout(() => {
-    if (port) {
-      status.textContent = 'Net Reaper is running';
-      status.className = 'status connected';
-      port.disconnect();
-    }
-  }, 300);
-} catch {
-  status.textContent = 'Net Reaper is not running';
-  status.className = 'status disconnected';
+// Check whether the desktop app is running by pinging through the native host.
+// The host tries to connect to the app's named pipe; only if that succeeds is
+// the app actually running. Just spawning the host process is not enough.
+function setStatus(running) {
+  if (running) {
+    status.textContent = 'Net Reaper is running';
+    status.className = 'status connected';
+  } else {
+    status.textContent = 'Net Reaper is not running';
+    status.className = 'status disconnected';
+  }
 }
+
+// One ping cycle: spawn a fresh native host process, send {ping:true}, settle
+// status from the first reply (or from disconnect / 1500ms timeout). We do not
+// keep a long-lived port because the host exits after each cycle by design.
+function pingOnce() {
+  let settled = false;
+  let port;
+  const settle = (running) => {
+    if (settled) return;
+    settled = true;
+    setStatus(running);
+    try { port && port.disconnect(); } catch (_) {}
+  };
+
+  try {
+    port = chrome.runtime.connectNative('com.eerie.net_reaper');
+  } catch {
+    setStatus(false);
+    return;
+  }
+
+  port.onMessage.addListener((msg) => {
+    if (msg && msg.status === 'ok') settle(true);
+    else if (msg && msg.status === 'error' && /not running/i.test(msg.message || '')) settle(false);
+    else settle(true);
+  });
+
+  port.onDisconnect.addListener(() => settle(false));
+
+  try {
+    port.postMessage({ ping: true });
+  } catch {
+    settle(false);
+    return;
+  }
+
+  setTimeout(() => settle(false), 1500);
+}
+
+// Initial check, then poll every 2 seconds while the popup is open so the
+// status reflects the user starting or quitting Net Reaper without needing
+// to close and reopen the popup.
+pingOnce();
+const statusInterval = setInterval(pingOnce, 2000);
+window.addEventListener('unload', () => clearInterval(statusInterval));
 
 // Get raw log text from storage
 function getLogText(callback) {

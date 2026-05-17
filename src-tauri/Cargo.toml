@@ -1,6 +1,6 @@
 [package]
 name = "net-reaper"
-version = "1.0.1"
+version = "1.0.3"
 description = "A high-performance internet download manager"
 authors = ["EERIE"]
 edition = "2021"
@@ -26,12 +26,17 @@ tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["stream"] }
+wreq = { version = "6.0.0-rc.28", features = ["stream"] }
+wreq-util = "3.0.0-rc"
 futures-util = "0.3"
+# reqwest removed in favour of wreq (Chrome TLS impersonation via BoringSSL).
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs-next = "2"
 urlencoding = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Security", "Win32_Foundation"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

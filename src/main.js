@@ -150,6 +150,24 @@ function initDebug() {
     });
   }
 
+  // Copy All button
+  const copyBtn = $('#debugCopyBtn');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      const rows = getDebugLogData();
+      if (rows.length === 0) return;
+      const text = rows.map(r => `${r.ts}  ${r.level.padEnd(5)}  ${r.msg}`).join('\n');
+      const original = copyBtn.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = 'Copied!';
+      } catch (e) {
+        copyBtn.textContent = 'Failed';
+      }
+      setTimeout(() => { copyBtn.textContent = original; }, 1200);
+    });
+  }
+
   // Export button & menu
   const exportBtn = $('#debugExportBtn');
   const exportMenu = $('#debugExportMenu');
@@ -540,6 +558,31 @@ function saveHistory(history) {
   localStorage.setItem('nr_history', JSON.stringify(history.slice(0, 500)));
 }
 
+// On app startup, any history entry that isn't in a terminal state
+// (Completed, Failed, Cancelled) and isn't still alive in the Rust
+// download manager is stale - the download was actually interrupted when
+// the app was closed. Rust state is in-memory only, so nothing resumes.
+// Mark these as Failed so the History view is honest. The liveIds check
+// prevents touching entries that are still running (e.g. dev webview reload
+// while Rust keeps the process alive).
+function sanitizeStaleHistoryOnStartup() {
+  const history = getHistory();
+  const terminal = new Set(['Completed', 'Failed', 'Cancelled']);
+  const liveIds = new Set(downloads.map(d => d.id));
+  let touched = 0;
+  for (const entry of history) {
+    if (!terminal.has(entry.status) && !liveIds.has(entry.id)) {
+      entry.status = 'Failed';
+      entry.updated = new Date().toISOString();
+      touched++;
+    }
+  }
+  if (touched > 0) {
+    saveHistory(history);
+    dbg('info', `Sanitized ${touched} interrupted history entr${touched === 1 ? 'y' : 'ies'} -> Failed`);
+  }
+}
+
 function addOrUpdateHistory(download) {
   const history = getHistory();
 
@@ -807,22 +850,15 @@ function createDownloadElement(d) {
   });
   el.querySelector('.btn-retry').addEventListener('click', async (e) => {
     e.stopPropagation();
-    const retryUrl = d.url;
-    const retryFilename = d.filename;
-    const retryDir = d.save_path.replace(/[\\/][^\\/]+$/, '');
-    dbg('info', `Retry clicked: ${d.id} (${retryFilename}) - removing old and re-adding`);
+    dbg('info', `Retry clicked: ${d.id} (${d.filename || 'unknown'}) - resetting in place to reuse cookies/UA/referer`);
     try {
-      await invoke('remove_download', { id: d.id });
-      downloads = downloads.filter(dl => dl.id !== d.id);
+      // Use retry_download (which calls reset_for_retry under the hood) so the
+      // cookies/UA/referer/method maps the extension populated stay attached
+      // to this id. The previous implementation did remove + add_download
+      // with cookies: null, which is why retries failed instantly on
+      // Cloudflare-protected URLs with "extension did not forward cookies/UA".
       delete _smoothedSpeeds[d.id];
-
-      const max = getMaxConcurrent();
-      const active = getActiveCount();
-      const autoStart = active < max;
-      const newId = await invoke('add_download', {
-        url: retryUrl, saveDir: retryDir, filename: retryFilename, autoStart, cookies: null, method: null, referer: null, scheduledAt: null, isHls: isHlsUrl(retryUrl),
-      });
-      dbg('event', `Retry created new download: ${newId}`);
+      await invoke('retry_download', { id: d.id });
       downloads = await invoke('get_downloads');
       render();
     } catch (err) {
@@ -872,7 +908,7 @@ function updateDownloadElement(el, d) {
 
   // Status badge
   const badge = el.querySelector('.dl-status');
-  badge.textContent = d.status;
+  badge.textContent = d.status === 'Starting' ? 'Starting, Please Wait...' : d.status;
   badge.className = 'dl-status ' + statusClass(d.status);
 
   // Progress bar
@@ -883,7 +919,7 @@ function updateDownloadElement(el, d) {
 
   // Action buttons visibility
   const isPaused = d.status === 'Paused';
-  const isActive = d.status === 'Downloading' || d.status === 'Queued';
+  const isActive = d.status === 'Downloading' || d.status === 'Queued' || d.status === 'Starting';
   const isFailed = d.status === 'Failed' || d.status === 'Cancelled';
   const isDone = d.status === 'Completed' || isFailed;
 
@@ -953,7 +989,7 @@ let _lastDiskCalcTime = 0;
 
 function updateSpeedGraph() {
   const wrap = $('#speedGraphWrap');
-  const hasActive = downloads.some(d => d.status === 'Downloading' || d.status === 'Queued');
+  const hasActive = downloads.some(d => d.status === 'Downloading' || d.status === 'Queued' || d.status === 'Starting');
 
   const now = Date.now();
   const totalSpeed = downloads
@@ -1100,7 +1136,7 @@ function drawGraph(currentSpeed) {
 }
 
 function updateFooter() {
-  const active = downloads.filter(d => d.status === 'Downloading' || d.status === 'Queued').length;
+  const active = downloads.filter(d => d.status === 'Downloading' || d.status === 'Queued' || d.status === 'Starting').length;
   const completed = downloads.filter(d => d.status === 'Completed').length;
   const totalSpeed = downloads
     .filter(d => d.status === 'Downloading')
@@ -1123,7 +1159,7 @@ function updateOverallProgress() {
 
   // Include downloading, queued, and paused
   const tracked = downloads.filter(d =>
-    d.status === 'Downloading' || d.status === 'Queued' || d.status === 'Paused'
+    d.status === 'Downloading' || d.status === 'Queued' || d.status === 'Paused' || d.status === 'Starting'
   );
 
   // Track IDs - when one leaves, only count it as 100% if it actually completed
@@ -1163,7 +1199,7 @@ function updateOverallProgress() {
   }, 0);
   const percent = (activePercentSum + _completedCount * 100) / totalCount;
 
-  const downloading = tracked.filter(d => d.status === 'Downloading').length;
+  const downloading = tracked.filter(d => d.status === 'Downloading' || d.status === 'Starting').length;
   const queued = tracked.filter(d => d.status === 'Queued').length;
   const paused = tracked.filter(d => d.status === 'Paused').length;
 
@@ -1298,7 +1334,7 @@ function getMaxConcurrent() {
 }
 
 function getActiveCount() {
-  return downloads.filter(d => d.status === 'Downloading').length;
+  return downloads.filter(d => d.status === 'Downloading' || d.status === 'Starting').length;
 }
 
 let _startingQueued = false;
@@ -1346,6 +1382,18 @@ async function addDownload() {
   } else if (_pendingBrowserDownload?.filename) {
     resolvedFilename = _pendingBrowserDownload.filename;
     dbg('info', `Using filename from browser extension: ${resolvedFilename}`);
+  } else if (_pendingBrowserDownload) {
+    // Extension provided the URL but the browser had not determined a
+    // filename yet (we cancelled fast). Derive from URL instead of doing an
+    // unauthenticated HEAD that could trip Cloudflare or burn a one-use token.
+    try {
+      const u = new URL(url);
+      const last = (u.pathname.split('/').pop() || 'download');
+      resolvedFilename = decodeURIComponent(last) || 'download';
+    } catch (_) {
+      resolvedFilename = 'download';
+    }
+    dbg('info', `Derived filename from URL: ${resolvedFilename}`);
   } else {
     try {
       dbg('info', 'Resolving filename...');
@@ -1406,13 +1454,17 @@ async function addDownload() {
     const active = getActiveCount();
     // Don't auto-start if scheduled in the future
     const autoStart = !scheduledAt && active < max;
-    const customFilename = (filename && filename !== resolvedFilename) ? filename : null;
+    // Always send a filename so the backend can skip its own unauthenticated
+    // HEAD probe. Falls back to resolvedFilename if the dialog returned the
+    // same name.
+    const customFilename = filename || resolvedFilename || null;
 
     const cookies = _pendingBrowserDownload?.cookies || null;
     const method = _pendingBrowserDownload?.method || null;
     const referer = _pendingBrowserDownload?.referer || null;
-    dbg('info', `Invoking add_download: url=${url}, dir=${saveDir}, file=${filename}, autoStart=${autoStart}${scheduledAt ? ` (scheduled ${scheduledAt})` : ''}${hls ? ' [HLS]' : ''}`);
-    const id = await invoke('add_download', { url, saveDir, filename: customFilename, autoStart, cookies, method, referer, scheduledAt, isHls: hls });
+    const userAgent = _pendingBrowserDownload?.userAgent || null;
+    dbg('info', `Invoking add_download: url=${url}, dir=${saveDir}, file=${filename}, autoStart=${autoStart}${scheduledAt ? ` (scheduled ${scheduledAt})` : ''}${hls ? ' [HLS]' : ''}${userAgent ? ' [browser UA]' : ''}`);
+    const id = await invoke('add_download', { url, saveDir, filename: customFilename, autoStart, cookies, method, referer, userAgent, scheduledAt, isHls: hls });
     dbg('event', `Download created with id: ${id}${autoStart ? '' : ' (queued)'}`);
     const allDownloads = await invoke('get_downloads');
     downloads = allDownloads;
@@ -1515,6 +1567,7 @@ listen('browser-download', async (event) => {
       filesize: req.filesize || null,
       method: req.method || null,
       referer: req.referer || null,
+      userAgent: req.userAgent || null,
       _reuseDir: reuseDir,
     };
     urlInput.value = req.url;
@@ -1530,6 +1583,7 @@ listen('browser-download', async (event) => {
     filesize: req.filesize || null,
     method: req.method || null,
     referer: req.referer || null,
+    userAgent: req.userAgent || null,
   };
   urlInput.value = req.url;
   await addDownload();
@@ -1630,6 +1684,10 @@ async function init() {
   } catch (e) {
     dbg('error', `Could not get downloads: ${e}`);
   }
+
+  sanitizeStaleHistoryOnStartup();
+  renderHistory();
+
   dbg('info', 'Init complete');
 }
 
