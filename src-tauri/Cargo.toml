@@ -1,6 +1,6 @@
 [package]
 name = "net-reaper"
-version = "1.0.3"
+version = "1.0.4"
 description = "A high-performance internet download manager"
 authors = ["EERIE"]
 edition = "2021"

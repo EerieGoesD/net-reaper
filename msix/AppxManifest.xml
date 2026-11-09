@@ -7,7 +7,7 @@
 
   <Identity
     Name="20715EerieGoesD.NetReaper"
-    Version="1.0.3.0"
+    Version="1.0.4.0"
     Publisher="CN=A2A89A47-0B2B-4C32-B85C-9753888A9FFC"
     ProcessorArchitecture="x64" />
 
@@ -32,10 +32,11 @@
       <uap:VisualElements
         DisplayName="Net Reaper"
         Description="Download manager"
-        BackgroundColor="#0a0a0c"
+        BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" Square71x71Logo="Assets\SmallTile.png" Square310x310Logo="Assets\LargeTile.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
     </Application>
   </Applications>

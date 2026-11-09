@@ -147,3 +147,6 @@ src-tauri/binaries/
 *.dmg
 *.AppImage
 browser-extension/net-reaper-extension.zip
+msix-dist/
+*.msix
+*.msixbundle
